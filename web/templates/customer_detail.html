@@ -1,0 +1,74 @@
+{{define "content"}}
+<p><a class="link" href="/admin">← Kembali</a></p>
+
+<div class="card">
+  <h1>{{.Customer.Email}}</h1>
+  <table>
+    <tr><th>Produk</th><td>{{.Customer.ProductCode}}</td></tr>
+    <tr><th>Jumlah Pembelian</th><td>{{.Customer.PurchaseCount}}</td></tr>
+    <tr><th>Kuota Aktivasi</th><td>{{.Customer.ActiveCount}} / {{.Customer.MaxActivations}} terpakai</td></tr>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Aktivasi</h2>
+  <table>
+    <thead><tr><th>Mesin</th><th>Status</th><th>Aktivasi Terakhir</th><th>Terakhir Terlihat</th><th>Kadaluarsa</th><th></th></tr></thead>
+    <tbody>
+      {{range .Activations}}
+      <tr>
+        <td>{{if .MachineLabel}}{{.MachineLabel}}{{end}} <span class="muted">{{.MachineFingerprint}}</span></td>
+        <td>{{if eq .Status "ACTIVE"}}<span class="badge badge-active">Aktif</span>{{else}}<span class="badge badge-deactivated">Dilepas</span>{{end}}</td>
+        <td>{{.ActivatedAt.Format "2006-01-02 15:04"}}</td>
+        <td>{{.LastSeenAt.Format "2006-01-02 15:04"}}</td>
+        <td>{{.ExpiresAt.Format "2006-01-02"}}</td>
+        <td>
+          {{if eq .Status "ACTIVE"}}
+          <form method="post" action="/admin/activations/{{.ActivationID}}/deactivate" style="display:inline" onsubmit="return confirm('Lepas aktivasi mesin ini? Kuota akan bertambah 1.');">
+            <button type="submit" class="btn btn-danger" style="padding: 4px 10px; font-size: 12px;">Lepas</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="6" class="muted">Belum ada aktivasi.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Riwayat Pembelian</h2>
+  <table>
+    <thead><tr><th>Tanggal</th><th>Seat</th><th>Catatan</th></tr></thead>
+    <tbody>
+      {{range .Purchases}}
+      <tr><td>{{.CreateAt.Format "2006-01-02 15:04"}}</td><td>{{.Seats}}</td><td>{{if .Catatan}}{{.Catatan}}{{end}}</td></tr>
+      {{else}}
+      <tr><td colspan="3" class="muted">Belum ada pembelian.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Tambah Pembelian untuk Customer Ini</h2>
+  <form method="post" action="/admin/purchases">
+    <input type="hidden" name="email" value="{{.Customer.Email}}">
+    <input type="hidden" name="product_code" value="{{.Customer.ProductCode}}">
+    <div class="field-row">
+      <div class="field" style="max-width: 120px;">
+        <label for="seats">Jumlah Seat</label>
+        <input id="seats" name="seats" type="number" min="1" value="1" required>
+      </div>
+      <div class="field">
+        <label for="catatan">Catatan (opsional)</label>
+        <input id="catatan" name="catatan" type="text">
+      </div>
+      <div class="field" style="flex: 0 0 auto; align-self: flex-end;">
+        <button type="submit" class="btn">Catat</button>
+      </div>
+    </div>
+  </form>
+</div>
+{{end}}

@@ -1,0 +1,82 @@
+{{define "content"}}
+<div class="card">
+  <h1>Cari Customer</h1>
+  <form method="get" action="/admin">
+    <div class="field-row">
+      <div class="field"><input name="q" type="text" placeholder="Cari berdasarkan email..." value="{{.Query}}"></div>
+      <div class="field" style="flex: 0 0 auto;"><button type="submit" class="btn">Cari</button></div>
+    </div>
+  </form>
+  <table>
+    <thead><tr><th>Email</th><th>Produk</th><th>Pembelian</th><th>Kuota</th><th>Aktif</th><th></th></tr></thead>
+    <tbody>
+      {{range .Customers}}
+      <tr>
+        <td>{{.Email}}</td>
+        <td>{{.ProductCode}}</td>
+        <td>{{.PurchaseCount}}</td>
+        <td>{{.MaxActivations}}</td>
+        <td>{{.ActiveCount}}</td>
+        <td><a class="link" href="/admin/customers/{{.LicenseCustomerID}}">Detail →</a></td>
+      </tr>
+      {{else}}
+      <tr><td colspan="6" class="muted">Belum ada customer{{if .Query}} yang cocok dengan pencarian{{end}}.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Catat Pembelian Baru</h2>
+  <p class="muted">Kalau email + product_code ini sudah pernah beli sebelumnya, seat akan ditambahkan ke akun yang sama (bukan bikin baru).</p>
+  <form method="post" action="/admin/purchases">
+    <div class="field-row">
+      <div class="field">
+        <label for="email">Email Customer</label>
+        <input id="email" name="email" type="email" required>
+      </div>
+      <div class="field">
+        <label for="product_code">Produk</label>
+        <select id="product_code" name="product_code" required>
+          {{range .Products}}<option value="{{.ProductCode}}">{{.Nama}} ({{.ProductCode}})</option>{{end}}
+        </select>
+      </div>
+      <div class="field" style="max-width: 100px;">
+        <label for="seats">Jumlah Seat</label>
+        <input id="seats" name="seats" type="number" min="1" value="1" required>
+      </div>
+    </div>
+    <div class="field">
+      <label for="catatan">Catatan (opsional)</label>
+      <input id="catatan" name="catatan" type="text" placeholder="mis. Invoice #123">
+    </div>
+    <button type="submit" class="btn">Catat Pembelian</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Produk</h2>
+  <table>
+    <thead><tr><th>Kode</th><th>Nama</th></tr></thead>
+    <tbody>
+      {{range .Products}}<tr><td>{{.ProductCode}}</td><td>{{.Nama}}</td></tr>{{else}}<tr><td colspan="2" class="muted">Belum ada produk.</td></tr>{{end}}
+    </tbody>
+  </table>
+  <h2 style="margin-top: 20px;">Tambah Produk</h2>
+  <form method="post" action="/admin/products">
+    <div class="field-row">
+      <div class="field">
+        <label for="new_product_code">Kode Produk</label>
+        <input id="new_product_code" name="product_code" type="text" placeholder="mis. FIXUNIT" required>
+      </div>
+      <div class="field">
+        <label for="new_product_nama">Nama Produk</label>
+        <input id="new_product_nama" name="nama" type="text" placeholder="mis. FixUnit" required>
+      </div>
+      <div class="field" style="flex: 0 0 auto; align-self: flex-end;">
+        <button type="submit" class="btn btn-secondary">Tambah</button>
+      </div>
+    </div>
+  </form>
+</div>
+{{end}}
