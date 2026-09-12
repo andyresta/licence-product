@@ -10,6 +10,10 @@
       <label for="password">Password</label>
       <input id="password" name="password" type="password" required>
     </div>
+    <div class="field">
+      <label for="captcha_answer">Verifikasi: berapa {{.CaptchaQuestion}} ?</label>
+      <input id="captcha_answer" name="captcha_answer" type="text" inputmode="numeric" autocomplete="off" required>
+    </div>
     <button type="submit" class="btn" style="width: 100%;">Masuk</button>
   </form>
 </div>

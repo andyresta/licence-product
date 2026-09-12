@@ -13,10 +13,11 @@ import (
 type AdminHandler struct {
 	admin   *admin.Service
 	session *sessionSigner
+	captcha *captchaSigner
 }
 
 func NewAdminHandler(adminSvc *admin.Service, sessionSecret string) *AdminHandler {
-	return &AdminHandler{admin: adminSvc, session: newSessionSigner(sessionSecret)}
+	return &AdminHandler{admin: adminSvc, session: newSessionSigner(sessionSecret), captcha: newCaptchaSigner(sessionSecret)}
 }
 
 // RequireAdmin exposes the session middleware so main.go can wrap admin-only routes.
@@ -25,16 +26,17 @@ func (h *AdminHandler) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 type pageData struct {
-	Title       string
-	LoggedIn    bool
-	Alert       string
-	AlertKind   string
-	Query       string
-	Customers   any
-	Products    any
-	Customer    any
-	Activations any
-	Purchases   any
+	Title           string
+	LoggedIn        bool
+	Alert           string
+	AlertKind       string
+	Query           string
+	Customers       any
+	Products        any
+	Customer        any
+	Activations     any
+	Purchases       any
+	CaptchaQuestion string
 }
 
 // renderPage parses layout.html plus exactly one page template per call, rather than
@@ -56,13 +58,21 @@ func (h *AdminHandler) LoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 	alert := ""
 	if r.URL.Query().Get("err") != "" {
-		alert = "Username atau password salah."
+		alert = "Username, password, atau jawaban verifikasi salah."
 	}
-	h.renderPage(w, "login.html", pageData{Title: "Login", Alert: alert, AlertKind: "danger"})
+	challenge := newCaptchaChallenge()
+	h.captcha.setCookie(w, challenge.Answer)
+	h.renderPage(w, "login.html", pageData{Title: "Login", Alert: alert, AlertKind: "danger", CaptchaQuestion: challenge.Question})
 }
 
 func (h *AdminHandler) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/login?err=1", http.StatusSeeOther)
+		return
+	}
+	captchaOK := h.captcha.verifyRequest(r)
+	h.captcha.clearCookie(w) // one attempt per solved challenge — next try needs a fresh page load
+	if !captchaOK {
 		http.Redirect(w, r, "/admin/login?err=1", http.StatusSeeOther)
 		return
 	}
