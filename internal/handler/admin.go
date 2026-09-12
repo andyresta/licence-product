@@ -26,17 +26,16 @@ func (h *AdminHandler) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 type pageData struct {
-	Title           string
-	LoggedIn        bool
-	Alert           string
-	AlertKind       string
-	Query           string
-	Customers       any
-	Products        any
-	Customer        any
-	Activations     any
-	Purchases       any
-	CaptchaQuestion string
+	Title       string
+	LoggedIn    bool
+	Alert       string
+	AlertKind   string
+	Query       string
+	Customers   any
+	Products    any
+	Customer    any
+	Activations any
+	Purchases   any
 }
 
 // renderPage parses layout.html plus exactly one page template per call, rather than
@@ -58,11 +57,16 @@ func (h *AdminHandler) LoginPage(w http.ResponseWriter, r *http.Request) {
 	}
 	alert := ""
 	if r.URL.Query().Get("err") != "" {
-		alert = "Username, password, atau jawaban verifikasi salah."
+		alert = "Username, password, atau kode captcha salah."
 	}
-	challenge := newCaptchaChallenge()
-	h.captcha.setCookie(w, challenge.Answer)
-	h.renderPage(w, "login.html", pageData{Title: "Login", Alert: alert, AlertKind: "danger", CaptchaQuestion: challenge.Question})
+	h.renderPage(w, "login.html", pageData{Title: "Login", Alert: alert, AlertKind: "danger"})
+}
+
+// CaptchaImage serves the distorted PNG the login page's <img> tag points at —
+// generating and cookie-signing a fresh code on every request. Public (no
+// RequireAdmin) since it must be reachable before login.
+func (h *AdminHandler) CaptchaImage(w http.ResponseWriter, r *http.Request) {
+	h.captcha.ServeImage(w, r)
 }
 
 func (h *AdminHandler) LoginSubmit(w http.ResponseWriter, r *http.Request) {
@@ -71,7 +75,7 @@ func (h *AdminHandler) LoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	captchaOK := h.captcha.verifyRequest(r)
-	h.captcha.clearCookie(w) // one attempt per solved challenge — next try needs a fresh page load
+	h.captcha.clearCookie(w) // one attempt per solved code — next try needs a fresh image load
 	if !captchaOK {
 		http.Redirect(w, r, "/admin/login?err=1", http.StatusSeeOther)
 		return

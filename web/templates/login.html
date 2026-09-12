@@ -11,8 +11,15 @@
       <input id="password" name="password" type="password" required>
     </div>
     <div class="field">
-      <label for="captcha_answer">Verifikasi: berapa {{.CaptchaQuestion}} ?</label>
-      <input id="captcha_answer" name="captcha_answer" type="text" inputmode="numeric" autocomplete="off" required>
+      <label for="captcha_answer">Masukkan kode pada gambar</label>
+      <div style="display: flex; align-items: center; gap: 10px; margin-bottom: 8px;">
+        <img id="captcha-img" src="/admin/captcha.png" width="160" height="60"
+             alt="Kode captcha" style="border: 1px solid #cbd5e1; border-radius: 6px;">
+        <button type="button" class="btn btn-secondary" style="flex: 0 0 auto; padding: 8px 12px;"
+                onclick="document.getElementById('captcha-img').src = '/admin/captcha.png?t=' + Date.now()">↻</button>
+      </div>
+      <input id="captcha_answer" name="captcha_answer" type="text" maxlength="4" autocomplete="off"
+             autocapitalize="characters" style="text-transform: uppercase; letter-spacing: 4px;" required>
     </div>
     <button type="submit" class="btn" style="width: 100%;">Masuk</button>
   </form>

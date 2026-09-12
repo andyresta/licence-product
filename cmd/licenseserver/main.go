@@ -60,6 +60,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/deactivate", apiHandler.Deactivate)
 
 	mux.HandleFunc("GET /admin/login", adminHandler.LoginPage)
+	mux.HandleFunc("GET /admin/captcha.png", adminHandler.CaptchaImage)
 	mux.HandleFunc("POST /admin/login", adminHandler.LoginSubmit)
 	mux.HandleFunc("POST /admin/logout", adminHandler.Logout)
 	mux.HandleFunc("GET /admin", adminHandler.RequireAdmin(adminHandler.Dashboard))
