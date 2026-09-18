@@ -7,15 +7,17 @@ import (
 	"net/http"
 
 	"github.com/andyresta/licence-product/internal/apperror"
+	"github.com/andyresta/licence-product/internal/service/branch"
 	"github.com/andyresta/licence-product/internal/service/license"
 )
 
 type APIHandler struct {
 	license *license.Service
+	branch  *branch.Service
 }
 
-func NewAPIHandler(license *license.Service) *APIHandler {
-	return &APIHandler{license: license}
+func NewAPIHandler(license *license.Service, branch *branch.Service) *APIHandler {
+	return &APIHandler{license: license, branch: branch}
 }
 
 type envelope struct {
@@ -94,4 +96,71 @@ func (h *APIHandler) Deactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, envelope{Success: true})
+}
+
+type branchCheckRequest struct {
+	LicenseLic string `json:"license_lic"`
+}
+
+// BranchCheck handles POST /api/v1/branches/check — a read-only peek at a license's
+// branch quota, identified by its license.lic content. Registers nothing; safe to call
+// as often as a product likes (e.g. to show "3/5 cabang terpakai" in its own UI).
+func (h *APIHandler) BranchCheck(w http.ResponseWriter, r *http.Request) {
+	var req branchCheckRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAppError(w, apperror.New(apperror.Validation, "body permintaan tidak valid"))
+		return
+	}
+	if req.LicenseLic == "" {
+		writeAppError(w, apperror.New(apperror.Validation, "license_lic wajib diisi"))
+		return
+	}
+	result, appErr := h.branch.Check(r.Context(), req.LicenseLic)
+	if appErr != nil {
+		writeAppError(w, appErr)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]any{
+		"exist": result.Exist,
+		"kuota": result.Kuota,
+	}})
+}
+
+type branchRegisterRequest struct {
+	LicenseLic  string  `json:"license_lic"`
+	BranchCode  string  `json:"branch_code"`
+	BranchLabel *string `json:"branch_label"`
+}
+
+// BranchRegister handles POST /api/v1/branches/register. Unlike every other failure in
+// this API, a QUOTA_EXCEEDED response here still carries "data" (exist/kuota) — the
+// caller needs those numbers to tell the customer why registration was refused, not
+// just that it was.
+func (h *APIHandler) BranchRegister(w http.ResponseWriter, r *http.Request) {
+	var req branchRegisterRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAppError(w, apperror.New(apperror.Validation, "body permintaan tidak valid"))
+		return
+	}
+	if req.LicenseLic == "" || req.BranchCode == "" {
+		writeAppError(w, apperror.New(apperror.Validation, "license_lic dan branch_code wajib diisi"))
+		return
+	}
+	result, appErr := h.branch.Register(r.Context(), branch.RegisterInput{
+		LicenseLic:  req.LicenseLic,
+		BranchCode:  req.BranchCode,
+		BranchLabel: req.BranchLabel,
+	})
+	if appErr != nil {
+		body := envelope{Success: false, Code: string(appErr.Code), Message: appErr.Message}
+		if appErr.Code == apperror.QuotaExceeded {
+			body.Data = map[string]any{"exist": result.Exist, "kuota": result.Kuota}
+		}
+		writeJSON(w, appErr.HTTPStatus(), body)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]any{
+		"exist": result.Exist,
+		"kuota": result.Kuota,
+	}})
 }

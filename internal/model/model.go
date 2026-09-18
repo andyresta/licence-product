@@ -24,6 +24,8 @@ type LicenseCustomer struct {
 	ActiveCount       int       `json:"active_count"` // computed: COUNT(activations WHERE status='ACTIVE')
 	Catatan           *string   `json:"catatan,omitempty"`
 	CreateAt          time.Time `json:"create_at"`
+	MaxBranches       int       `json:"max_branches"`
+	ActiveBranchCount int       `json:"active_branch_count"` // computed: COUNT(branches WHERE status='ACTIVE')
 }
 
 type Purchase struct {
@@ -53,6 +55,27 @@ type Activation struct {
 	LastSeenAt         time.Time  `json:"last_seen_at"`
 	DeactivatedAt      *time.Time `json:"deactivated_at,omitempty"`
 	ExpiresAt          time.Time  `json:"expires_at"`
+}
+
+const (
+	BranchStatusActive      = "ACTIVE"
+	BranchStatusDeactivated = "DEACTIVATED"
+)
+
+// Branch is one registered branch/outlet under a LicenseCustomer — an optional second
+// quota axis alongside Activation (machine installs). Only products that choose to call
+// the /api/v1/branches/* endpoints ever populate this table; every LicenseCustomer still
+// carries a MaxBranches value regardless of whether the product uses it. See
+// internal/service/branch for the register/reuse/reclaim state machine (mirrors
+// Activation's exactly).
+type Branch struct {
+	BranchID          string     `json:"branch_id"`
+	LicenseCustomerID string     `json:"license_customer_id"`
+	BranchCode        string     `json:"branch_code"`
+	BranchLabel       *string    `json:"branch_label,omitempty"`
+	Status            string     `json:"status"`
+	RegisteredAt      time.Time  `json:"registered_at"`
+	DeactivatedAt     *time.Time `json:"deactivated_at,omitempty"`
 }
 
 type AdminUser struct {

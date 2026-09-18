@@ -108,6 +108,119 @@ func TestForceDeactivate_FreesSeatForNextActivation(t *testing.T) {
 	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
 }
 
+func TestUpdateProduct_ChangesNameAndDescription(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	product, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+
+	appErr = svc.UpdateProduct(context.Background(), product.ProductID, "FixUnit POS", "Aplikasi kasir")
+	require.Nil(t, appErr)
+
+	products, err := svc.ListProducts(context.Background())
+	require.NoError(t, err)
+	require.Len(t, products, 1)
+	assert.Equal(t, "FixUnit POS", products[0].Nama)
+	require.NotNil(t, products[0].Keterangan)
+	assert.Equal(t, "Aplikasi kasir", *products[0].Keterangan)
+}
+
+func TestSetProductStatus_DeactivatedProductRejectsNewPurchases(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	adminID := seedAdmin(t, db)
+	product, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+
+	require.Nil(t, svc.SetProductStatus(context.Background(), product.ProductID, false))
+
+	appErr = svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID)
+	require.NotNil(t, appErr, "an inactive product must refuse new purchases")
+	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
+
+	require.Nil(t, svc.SetProductStatus(context.Background(), product.ProductID, true))
+	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+}
+
+func TestDeleteProduct_RefusesWhenCustomerExists(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	adminID := seedAdmin(t, db)
+	product, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+
+	appErr = svc.DeleteProduct(context.Background(), product.ProductID)
+	require.NotNil(t, appErr, "a product with a recorded customer must not be deletable")
+	assert.Equal(t, "VALIDATION", string(appErr.Code))
+
+	products, err := svc.ListProducts(context.Background())
+	require.NoError(t, err)
+	assert.Len(t, products, 1, "the product must still exist")
+}
+
+func TestDeleteProduct_RemovesUnusedProduct(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	product, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+
+	require.Nil(t, svc.DeleteProduct(context.Background(), product.ProductID))
+
+	products, err := svc.ListProducts(context.Background())
+	require.NoError(t, err)
+	assert.Empty(t, products)
+}
+
+func TestSetMaxBranches_UpdatesQuotaDirectly(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	adminID := seedAdmin(t, db)
+	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+
+	customers, err := svc.ListCustomers(context.Background(), "budi")
+	require.NoError(t, err)
+	require.Len(t, customers, 1)
+	assert.Equal(t, 5, customers[0].MaxBranches, "schema default is 5")
+
+	require.Nil(t, svc.SetMaxBranches(context.Background(), customers[0].LicenseCustomerID, 10))
+
+	customer, appErr := svc.GetCustomer(context.Background(), customers[0].LicenseCustomerID)
+	require.Nil(t, appErr)
+	assert.Equal(t, 10, customer.MaxBranches)
+}
+
+func TestForceDeactivateBranch_FreesSlotForNextRegistration(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	adminID := seedAdmin(t, db)
+	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+
+	customers, err := svc.ListCustomers(context.Background(), "budi")
+	require.NoError(t, err)
+	customerID := customers[0].LicenseCustomerID
+
+	_, err = db.Exec(`INSERT INTO branches (branch_id, license_customer_id, branch_code, status)
+		VALUES ('BRC000001', $1, 'CABANG-JKT', 'ACTIVE')`, customerID)
+	require.NoError(t, err)
+
+	appErr = svc.ForceDeactivateBranch(context.Background(), "BRC000001", adminID)
+	require.Nil(t, appErr)
+
+	branches, err := svc.ListBranches(context.Background(), customerID)
+	require.NoError(t, err)
+	require.Len(t, branches, 1)
+	assert.Equal(t, "DEACTIVATED", branches[0].Status)
+
+	appErr = svc.ForceDeactivateBranch(context.Background(), "BRC000001", adminID)
+	require.NotNil(t, appErr)
+	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
+}
+
 func TestAuthenticate_WrongPassword_Rejected(t *testing.T) {
 	db := testutil.OpenTestDB(t)
 	svc := New(db)

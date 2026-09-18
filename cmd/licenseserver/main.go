@@ -14,6 +14,7 @@ import (
 	"github.com/andyresta/licence-product/internal/handler"
 	"github.com/andyresta/licence-product/internal/repository"
 	"github.com/andyresta/licence-product/internal/service/admin"
+	"github.com/andyresta/licence-product/internal/service/branch"
 	"github.com/andyresta/licence-product/internal/service/license"
 )
 
@@ -50,14 +51,17 @@ func main() {
 	log.Printf("license public key (embed this in every consuming product): %s", signer.PublicKeyHex())
 
 	licenseSvc := license.New(db, signer)
+	branchSvc := branch.New(db, signer)
 	adminSvc := admin.New(db)
 
-	apiHandler := handler.NewAPIHandler(licenseSvc)
+	apiHandler := handler.NewAPIHandler(licenseSvc, branchSvc)
 	adminHandler := handler.NewAdminHandler(adminSvc, cfg.SessionSecret)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/v1/activate", apiHandler.Activate)
 	mux.HandleFunc("POST /api/v1/deactivate", apiHandler.Deactivate)
+	mux.HandleFunc("POST /api/v1/branches/check", apiHandler.BranchCheck)
+	mux.HandleFunc("POST /api/v1/branches/register", apiHandler.BranchRegister)
 
 	mux.HandleFunc("GET /admin/login", adminHandler.LoginPage)
 	mux.HandleFunc("GET /admin/captcha.png", adminHandler.CaptchaImage)
@@ -66,8 +70,13 @@ func main() {
 	mux.HandleFunc("GET /admin", adminHandler.RequireAdmin(adminHandler.Dashboard))
 	mux.HandleFunc("GET /admin/customers/{id}", adminHandler.RequireAdmin(adminHandler.CustomerDetail))
 	mux.HandleFunc("POST /admin/products", adminHandler.RequireAdmin(adminHandler.CreateProduct))
+	mux.HandleFunc("POST /admin/products/{id}/update", adminHandler.RequireAdmin(adminHandler.UpdateProduct))
+	mux.HandleFunc("POST /admin/products/{id}/toggle", adminHandler.RequireAdmin(adminHandler.ToggleProductStatus))
+	mux.HandleFunc("POST /admin/products/{id}/delete", adminHandler.RequireAdmin(adminHandler.DeleteProduct))
 	mux.HandleFunc("POST /admin/purchases", adminHandler.RequireAdmin(adminHandler.RecordPurchase))
 	mux.HandleFunc("POST /admin/activations/{id}/deactivate", adminHandler.RequireAdmin(adminHandler.ForceDeactivate))
+	mux.HandleFunc("POST /admin/customers/{id}/branches/quota", adminHandler.RequireAdmin(adminHandler.SetBranchQuota))
+	mux.HandleFunc("POST /admin/branches/{id}/deactivate", adminHandler.RequireAdmin(adminHandler.ForceDeactivateBranch))
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

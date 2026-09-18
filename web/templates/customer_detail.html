@@ -7,6 +7,7 @@
     <tr><th>Produk</th><td>{{.Customer.ProductCode}}</td></tr>
     <tr><th>Jumlah Pembelian</th><td>{{.Customer.PurchaseCount}}</td></tr>
     <tr><th>Kuota Aktivasi</th><td>{{.Customer.ActiveCount}} / {{.Customer.MaxActivations}} terpakai</td></tr>
+    <tr><th>Kuota Branch</th><td>{{.Customer.ActiveBranchCount}} / {{.Customer.MaxBranches}} terpakai</td></tr>
   </table>
 </div>
 
@@ -35,6 +36,45 @@
       {{end}}
     </tbody>
   </table>
+</div>
+
+<div class="card">
+  <h2>Branch</h2>
+  <p class="muted">Fitur opsional — hanya terisi kalau produk yang dipakai customer ini memanggil endpoint /api/v1/branches/register. Kuota ini terpisah dari kuota aktivasi mesin di atas.</p>
+  <table>
+    <thead><tr><th>Kode Branch</th><th>Label</th><th>Status</th><th>Terdaftar</th><th></th></tr></thead>
+    <tbody>
+      {{range .Branches}}
+      <tr>
+        <td>{{.BranchCode}}</td>
+        <td>{{if .BranchLabel}}{{.BranchLabel}}{{end}}</td>
+        <td>{{if eq .Status "ACTIVE"}}<span class="badge badge-active">Aktif</span>{{else}}<span class="badge badge-deactivated">Dilepas</span>{{end}}</td>
+        <td>{{.RegisteredAt.Format "2006-01-02 15:04"}}</td>
+        <td>
+          {{if eq .Status "ACTIVE"}}
+          <form method="post" action="/admin/branches/{{.BranchID}}/deactivate" style="display:inline" onsubmit="return confirm('Lepas branch ini? Kuota akan bertambah 1.');">
+            <button type="submit" class="btn btn-danger" style="padding: 4px 10px; font-size: 12px;">Lepas</button>
+          </form>
+          {{end}}
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="5" class="muted">Belum ada branch terdaftar.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  <h2 style="margin-top: 20px;">Ubah Kuota Branch</h2>
+  <form method="post" action="/admin/customers/{{.Customer.LicenseCustomerID}}/branches/quota">
+    <div class="field-row">
+      <div class="field" style="max-width: 120px;">
+        <label for="max_branches">Kuota Branch</label>
+        <input id="max_branches" name="max_branches" type="number" min="0" value="{{.Customer.MaxBranches}}" required>
+      </div>
+      <div class="field" style="flex: 0 0 auto; align-self: flex-end;">
+        <button type="submit" class="btn">Simpan</button>
+      </div>
+    </div>
+  </form>
 </div>
 
 <div class="card">

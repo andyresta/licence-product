@@ -105,6 +105,63 @@ func (s *Service) CreateProduct(ctx context.Context, code, nama string) (model.P
 	return model.Product{ProductID: id, ProductCode: code, Nama: nama, StatusAktif: true}, nil
 }
 
+// UpdateProduct changes a product's display name/description — not its product_code,
+// which every consuming product's build already has baked in as a literal constant (see
+// README's integration checklist), so changing it out from under them would silently
+// break activation for anyone already shipped.
+func (s *Service) UpdateProduct(ctx context.Context, productID, nama, keterangan string) *apperror.Error {
+	var ket any
+	if keterangan != "" {
+		ket = keterangan
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE products SET nama = $1, keterangan = $2, update_at = $3 WHERE product_id = $4`,
+		nama, ket, time.Now().UTC(), productID)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal memperbarui produk")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperror.New(apperror.NotFound, "produk tidak ditemukan")
+	}
+	return nil
+}
+
+// SetProductStatus activates/deactivates a product — the soft-delete path for a product
+// that already has customers (RecordPurchase already refuses new purchases against an
+// inactive product; see licenseCustomerSelect's WHERE p.status_aktif for activation).
+func (s *Service) SetProductStatus(ctx context.Context, productID string, aktif bool) *apperror.Error {
+	res, err := s.db.ExecContext(ctx, `UPDATE products SET status_aktif = $1, update_at = $2 WHERE product_id = $3`,
+		aktif, time.Now().UTC(), productID)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal mengubah status produk")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperror.New(apperror.NotFound, "produk tidak ditemukan")
+	}
+	return nil
+}
+
+// DeleteProduct removes a product row outright — only when it has never had a customer
+// recorded against it (license_customers.product_id references it). A product that's
+// already sold should be deactivated with SetProductStatus instead; deleting it would
+// orphan real customer history.
+func (s *Service) DeleteProduct(ctx context.Context, productID string) *apperror.Error {
+	var customerCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM license_customers WHERE product_id = $1`, productID).Scan(&customerCount); err != nil {
+		return apperror.New(apperror.Internal, "gagal memeriksa data produk")
+	}
+	if customerCount > 0 {
+		return apperror.New(apperror.Validation, "produk sudah punya customer — nonaktifkan saja, tidak bisa dihapus")
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM products WHERE product_id = $1`, productID)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal menghapus produk")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperror.New(apperror.NotFound, "produk tidak ditemukan")
+	}
+	return nil
+}
+
 // RecordPurchase finds-or-creates the (email, productCode) license_customers row, adds
 // seats to its cumulative max_activations, bumps purchase_count, and inserts an audit
 // row in purchases. All in one transaction so a crash never leaves purchase_count and
@@ -178,7 +235,8 @@ func (s *Service) RecordPurchase(ctx context.Context, email, productCode string,
 const licenseCustomerSelect = `
 	SELECT lc.license_customer_id, lc.email, lc.product_id, p.product_code, lc.purchase_count, lc.max_activations,
 		(SELECT COUNT(*) FROM activations a WHERE a.license_customer_id = lc.license_customer_id AND a.status = 'ACTIVE'),
-		lc.catatan, lc.create_at
+		lc.catatan, lc.create_at, lc.max_branches,
+		(SELECT COUNT(*) FROM branches b WHERE b.license_customer_id = lc.license_customer_id AND b.status = 'ACTIVE')
 	FROM license_customers lc
 	JOIN products p ON p.product_id = lc.product_id`
 
@@ -186,7 +244,7 @@ func scanLicenseCustomer(row interface{ Scan(dest ...any) error }) (model.Licens
 	var c model.LicenseCustomer
 	var catatan sql.NullString
 	if err := row.Scan(&c.LicenseCustomerID, &c.Email, &c.ProductID, &c.ProductCode, &c.PurchaseCount, &c.MaxActivations,
-		&c.ActiveCount, &catatan, &c.CreateAt); err != nil {
+		&c.ActiveCount, &catatan, &c.CreateAt, &c.MaxBranches, &c.ActiveBranchCount); err != nil {
 		return model.LicenseCustomer{}, err
 	}
 	if catatan.Valid {
@@ -291,6 +349,69 @@ func (s *Service) ForceDeactivate(ctx context.Context, activationID, adminUserID
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
 		return apperror.New(apperror.NotFound, "aktivasi tidak ditemukan atau sudah dilepas")
+	}
+	return nil
+}
+
+func (s *Service) ListBranches(ctx context.Context, licenseCustomerID string) ([]model.Branch, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT branch_id, license_customer_id, branch_code, branch_label, status, registered_at, deactivated_at
+		FROM branches WHERE license_customer_id = $1 ORDER BY registered_at DESC`, licenseCustomerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var branches []model.Branch
+	for rows.Next() {
+		var b model.Branch
+		var label sql.NullString
+		var deactivatedAt sql.NullTime
+		if err := rows.Scan(&b.BranchID, &b.LicenseCustomerID, &b.BranchCode, &label, &b.Status, &b.RegisteredAt, &deactivatedAt); err != nil {
+			return nil, err
+		}
+		if label.Valid {
+			b.BranchLabel = &label.String
+		}
+		if deactivatedAt.Valid {
+			b.DeactivatedAt = &deactivatedAt.Time
+		}
+		branches = append(branches, b)
+	}
+	return branches, rows.Err()
+}
+
+// SetMaxBranches directly overwrites a customer's branch quota. Unlike max_activations
+// (a running total that only grows, purchase by purchase), max_branches is a plain
+// adjustable setting — the vendor sets it once (default 5, from the schema) and changes
+// it directly as needed, no audit trail required.
+func (s *Service) SetMaxBranches(ctx context.Context, licenseCustomerID string, maxBranches int) *apperror.Error {
+	if maxBranches < 0 {
+		return apperror.New(apperror.Validation, "kuota branch tidak boleh negatif")
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE license_customers SET max_branches = $1, update_at = $2 WHERE license_customer_id = $3`,
+		maxBranches, time.Now().UTC(), licenseCustomerID)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal memperbarui kuota branch")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperror.New(apperror.NotFound, "customer tidak ditemukan")
+	}
+	return nil
+}
+
+// ForceDeactivateBranch is the admin-panel counterpart to ForceDeactivate (activations)
+// — frees a branch slot without a signed license.lic, for when the vendor needs to
+// correct a customer's branch list directly (e.g. a branch closed down).
+func (s *Service) ForceDeactivateBranch(ctx context.Context, branchID, adminUserID string) *apperror.Error {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE branches SET status = $1, deactivated_at = $2, deactivated_by = $3, update_at = $2
+		WHERE branch_id = $4 AND status = $5`,
+		model.BranchStatusDeactivated, time.Now().UTC(), adminUserID, branchID, model.BranchStatusActive)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal melepas branch")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperror.New(apperror.NotFound, "branch tidak ditemukan atau sudah dilepas")
 	}
 	return nil
 }

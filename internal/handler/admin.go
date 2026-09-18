@@ -36,6 +36,7 @@ type pageData struct {
 	Customer    any
 	Activations any
 	Purchases   any
+	Branches    any
 }
 
 // renderPage parses layout.html plus exactly one page template per call, rather than
@@ -128,7 +129,12 @@ func (h *AdminHandler) CustomerDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
 		return
 	}
-	data := pageData{Title: customer.Email, LoggedIn: true, Customer: customer, Activations: activations, Purchases: purchases}
+	branches, err := h.admin.ListBranches(r.Context(), id)
+	if err != nil {
+		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
+		return
+	}
+	data := pageData{Title: customer.Email, LoggedIn: true, Customer: customer, Activations: activations, Purchases: purchases, Branches: branches}
 	applyFlash(r, &data)
 	h.renderPage(w, "customer_detail.html", data)
 }
@@ -186,6 +192,84 @@ func (h *AdminHandler) ForceDeactivate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	http.Redirect(w, r, referer+sep+"ok="+url.QueryEscape("Aktivasi berhasil dilepas"), http.StatusSeeOther)
+}
+
+func (h *AdminHandler) UpdateProduct(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
+		return
+	}
+	appErr := h.admin.UpdateProduct(r.Context(), id, r.FormValue("nama"), r.FormValue("keterangan"))
+	if appErr != nil {
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/admin?ok="+url.QueryEscape("Produk berhasil diperbarui"), http.StatusSeeOther)
+}
+
+// ToggleProductStatus reads the desired new state from the submitting form's own hidden
+// "aktif" field (each product row renders its own Aktifkan/Nonaktifkan form with the
+// opposite of its current state baked in) rather than flipping status_aktif blindly —
+// that keeps this idempotent under a double-submit instead of toggling twice.
+func (h *AdminHandler) ToggleProductStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
+		return
+	}
+	aktif := r.FormValue("aktif") == "true"
+	if appErr := h.admin.SetProductStatus(r.Context(), id, aktif); appErr != nil {
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	msg := "Produk berhasil dinonaktifkan"
+	if aktif {
+		msg = "Produk berhasil diaktifkan"
+	}
+	http.Redirect(w, r, "/admin?ok="+url.QueryEscape(msg), http.StatusSeeOther)
+}
+
+func (h *AdminHandler) DeleteProduct(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if appErr := h.admin.DeleteProduct(r.Context(), id); appErr != nil {
+		http.Redirect(w, r, "/admin?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/admin?ok="+url.QueryEscape("Produk berhasil dihapus"), http.StatusSeeOther)
+}
+
+func (h *AdminHandler) SetBranchQuota(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
+		return
+	}
+	maxBranches, err := strconv.Atoi(r.FormValue("max_branches"))
+	if err != nil || maxBranches < 0 {
+		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape("kuota branch tidak valid"), http.StatusSeeOther)
+		return
+	}
+	if appErr := h.admin.SetMaxBranches(r.Context(), id, maxBranches); appErr != nil {
+		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/admin/customers/"+id+"?ok="+url.QueryEscape("Kuota branch berhasil diperbarui"), http.StatusSeeOther)
+}
+
+func (h *AdminHandler) ForceDeactivateBranch(w http.ResponseWriter, r *http.Request) {
+	branchID := r.PathValue("id")
+	adminUserID := adminUserIDFromContext(r.Context())
+	appErr := h.admin.ForceDeactivateBranch(r.Context(), branchID, adminUserID)
+	referer := r.Header.Get("Referer")
+	if referer == "" {
+		referer = "/admin"
+	}
+	if appErr != nil {
+		http.Redirect(w, r, referer+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, referer+"?ok="+url.QueryEscape("Branch berhasil dilepas"), http.StatusSeeOther)
 }
 
 func applyFlash(r *http.Request, data *pageData) {

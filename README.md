@@ -28,6 +28,13 @@ or API change.
    `POST /api/v1/deactivate` (self-service, e.g. before decommissioning a machine — see
    "Deactivation proof" below), or the vendor force-deactivates from the admin panel
    for the case where the old machine is already gone.
+6. **Branch is a second, optional quota axis (independent from activations).** Some
+   products sell to customers with multiple physical outlets/branches and want to limit
+   how many of those a license covers — separately from how many machines can run it.
+   Every `license_customers` row always carries a `max_branches` value (default 5,
+   adjustable per-customer from the admin panel), but nothing is enforced unless the
+   product itself calls `POST /api/v1/branches/register`. A product that doesn't care
+   about branches simply never calls it. See "Branch (optional)" below.
 
 ## Data model
 
@@ -42,6 +49,10 @@ or API change.
   `status = 'ACTIVE'` rows count against `max_activations`. See
   `internal/service/license/license.go` for the exact activate/reactivate/deactivate
   state machine and why re-activating the same fingerprint never double-counts.
+- `branches` — one row per branch/outlet a customer has registered, only ever populated
+  for products that call the branch endpoints. Mirrors `activations`'
+  ACTIVE/DEACTIVATED state machine exactly (see `internal/service/branch/branch.go`) —
+  only `status = 'ACTIVE'` rows count against `license_customers.max_branches`.
 
 ## API contract
 
@@ -93,6 +104,58 @@ email/product_code, which anyone could guess or overhear. Signature validity is
 checked; **expiry is deliberately not checked** — freeing a seat must work even after
 `license.lic` has expired. Failure codes: `INVALID_LICENSE` (bad/forged signature),
 `NOT_FOUND` (already deactivated).
+
+### Branch (optional)
+
+Not every product needs this — skip it entirely if a license only needs to limit
+machines, not branches/outlets. Both endpoints are identified by `license_lic` alone
+(no separate customer lookup); `branch_code` is whatever stable identifier the product
+uses for a branch (a store code, an outlet ID — anything unique per customer).
+
+#### `POST /api/v1/branches/check`
+
+Read-only — never registers anything. Useful to show "3/5 cabang terpakai" in the
+product's own UI without side effects.
+
+```json
+{ "license_lic": "<the license.lic this installation holds>" }
+```
+
+Success (`200`):
+
+```json
+{ "success": true, "data": { "exist": 3, "kuota": 5 } }
+```
+
+`exist` is the current count of ACTIVE branches for this license; `kuota` is
+`max_branches`. Failure codes: `INVALID_LICENSE`, `NOT_REGISTERED`.
+
+#### `POST /api/v1/branches/register`
+
+```json
+{
+  "license_lic": "<the license.lic this installation holds>",
+  "branch_code": "CABANG-JAKARTA",
+  "branch_label": "Cabang Jakarta Pusat (optional, for the admin panel's display only)"
+}
+```
+
+Success (`200`) — `true`/`false` is carried by `success`, alongside the resulting counts:
+
+```json
+{ "success": true, "data": { "exist": 4, "kuota": 5 } }
+```
+
+Registering a `branch_code` that's already ACTIVE for this license is a no-op reuse (no
+slot consumed) — safe to call on every app start the same way `/activate` is. Failure
+(`409`, quota full) — **unlike every other error response in this API, `data` is still
+present** so the caller can tell the customer why registration was refused:
+
+```json
+{ "success": false, "code": "QUOTA_EXCEEDED", "message": "kuota branch sudah penuh (5/5)", "data": { "exist": 5, "kuota": 5 } }
+```
+
+Other failure codes: `INVALID_LICENSE`, `NOT_REGISTERED`, `VALIDATION`.
 
 ## license.lic format
 
@@ -147,9 +210,12 @@ sees and stores the hash, never the raw hardware ID.
 `/admin` (session cookie, HMAC-signed, 12h TTL — see `internal/handler/session.go`).
 First admin account is created from `BOOTSTRAP_ADMIN` on first startup (never
 overwrites an existing account on later restarts). From the dashboard: search
-customers by email, add a product, record a purchase. From a customer's detail page:
-view every activation (with a "Lepas" button to force-deactivate) and the full
-purchase history.
+customers by email, record a purchase, and manage products — add, edit name/description,
+activate/deactivate, or delete (only allowed for a product with zero customers ever
+recorded against it; otherwise deactivate it instead). From a customer's detail page:
+view every activation (with a "Lepas" button to force-deactivate), the full purchase
+history, and — if the product uses it — every registered branch (with its own "Lepas"
+button) plus a field to adjust `max_branches` directly.
 
 ## Configuration (environment variables)
 
@@ -196,6 +262,7 @@ one package's truncate to race another's still-running test.
 ## What's NOT in this repo
 
 Client-side integration (computing the fingerprint, calling `/activate` from an
-install wizard, verifying `license.lic` at runtime, a "Lepas Aktivasi" UI action) lives
+install wizard, verifying `license.lic` at runtime, a "Lepas Aktivasi" UI action, and —
+for a product that opts into it — calling `/api/v1/branches/register` per branch) lives
 in each consuming product's own repo — this server only owns the shared contract
 above.
