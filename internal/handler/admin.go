@@ -34,9 +34,10 @@ type pageData struct {
 	Customers   any
 	Products    any
 	Customer    any
-	Activations any
-	Purchases   any
-	Branches    any
+	Activations            any
+	Purchases              any
+	Branches               any
+	SubscriptionExtensions any
 }
 
 // renderPage parses layout.html plus exactly one page template per call, rather than
@@ -134,7 +135,16 @@ func (h *AdminHandler) CustomerDetail(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
 		return
 	}
-	data := pageData{Title: customer.Email, LoggedIn: true, Customer: customer, Activations: activations, Purchases: purchases, Branches: branches}
+	subscriptionExtensions, err := h.admin.ListSubscriptionExtensions(r.Context(), id)
+	if err != nil {
+		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
+		return
+	}
+	data := pageData{
+		Title: customer.Email, LoggedIn: true, Customer: customer,
+		Activations: activations, Purchases: purchases, Branches: branches,
+		SubscriptionExtensions: subscriptionExtensions,
+	}
 	applyFlash(r, &data)
 	h.renderPage(w, "customer_detail.html", data)
 }
@@ -270,6 +280,29 @@ func (h *AdminHandler) ForceDeactivateBranch(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	http.Redirect(w, r, referer+"?ok="+url.QueryEscape("Branch berhasil dilepas"), http.StatusSeeOther)
+}
+
+func (h *AdminHandler) ExtendSubscription(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
+		return
+	}
+	months, err := strconv.Atoi(r.FormValue("months"))
+	if err != nil || months <= 0 {
+		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape("jumlah bulan tidak valid"), http.StatusSeeOther)
+		return
+	}
+	var catatan *string
+	if v := r.FormValue("catatan"); v != "" {
+		catatan = &v
+	}
+	adminUserID := adminUserIDFromContext(r.Context())
+	if appErr := h.admin.ExtendSubscription(r.Context(), id, months, catatan, adminUserID); appErr != nil {
+		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/admin/customers/"+id+"?ok="+url.QueryEscape("Langganan berhasil diperpanjang"), http.StatusSeeOther)
 }
 
 func applyFlash(r *http.Request, data *pageData) {

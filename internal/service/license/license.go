@@ -18,12 +18,19 @@ import (
 	"github.com/andyresta/licence-product/internal/model"
 )
 
-// DefaultLicenseTerm is how far in the future ExpiresAt is set for a normal
-// activation/reactivation when the caller doesn't request a specific term — the vendor
-// treats "lifetime" products as a very-far expiry (see README) rather than no expiry
-// at all, so every license.lic can be validated the same way regardless of whether the
-// underlying product is sold as perpetual or subscription.
+// DefaultLicenseTerm is how far in the future ExpiresAt is set for a lifetime customer
+// (license_customers.subscription_expires_at is NULL) — the vendor treats "lifetime"
+// products as a very-far expiry (see README) rather than no expiry field at all, so
+// every license.lic can be validated the same way regardless of whether the underlying
+// product is sold as perpetual or subscription.
 const DefaultLicenseTerm = 74 * 365 * 24 * time.Hour // ~74 years — comfortably "lifetime"
+
+// SubscriptionGracePeriod is added on top of a subscription customer's
+// subscription_expires_at when computing license.lic's expires_at — a lapsed renewal
+// (payment delay, no internet to refresh) doesn't lock the customer out the instant the
+// clock ticks past their due date. Extending the subscription (admin panel) is what
+// actually keeps access going long-term; this only smooths the boundary.
+const SubscriptionGracePeriod = 7 * 24 * time.Hour
 
 type Service struct {
 	db     *sql.DB
@@ -57,12 +64,13 @@ type ActivateResult struct {
 func (s *Service) Activate(ctx context.Context, input ActivateInput) (ActivateResult, *apperror.Error) {
 	var licenseCustomerID string
 	var maxActivations int
+	var subscriptionExpiresAt sql.NullTime
 	err := s.db.QueryRowContext(ctx, `
-		SELECT lc.license_customer_id
+		SELECT lc.license_customer_id, lc.subscription_expires_at
 		FROM license_customers lc
 		JOIN products p ON p.product_id = lc.product_id
 		WHERE lc.email = $1 AND p.product_code = $2 AND p.status_aktif`,
-		input.Email, input.ProductCode).Scan(&licenseCustomerID)
+		input.Email, input.ProductCode).Scan(&licenseCustomerID, &subscriptionExpiresAt)
 	if err == sql.ErrNoRows {
 		return ActivateResult{}, apperror.New(apperror.NotRegistered, "Email dan product_code ini tidak terdaftar")
 	}
@@ -99,7 +107,14 @@ func (s *Service) Activate(ctx context.Context, input ActivateInput) (ActivateRe
 	hasExistingRow := lookupErr == nil
 
 	now := time.Now().UTC()
+	// A subscription customer's license.lic always reflects their real due date (plus
+	// grace) — even if that's already in the past. Whether that's still valid is the
+	// same offline check every product already does client-side (see README); Activate
+	// itself only tracks quota, not date policy.
 	expiresAt := now.Add(DefaultLicenseTerm)
+	if subscriptionExpiresAt.Valid {
+		expiresAt = subscriptionExpiresAt.Time.Add(SubscriptionGracePeriod)
+	}
 
 	if hasExistingRow && existingStatus == model.ActivationStatusActive {
 		// Case 2: same machine, already active — refresh and reuse, no seat consumed.

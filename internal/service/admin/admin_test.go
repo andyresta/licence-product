@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -219,6 +220,61 @@ func TestForceDeactivateBranch_FreesSlotForNextRegistration(t *testing.T) {
 	appErr = svc.ForceDeactivateBranch(context.Background(), "BRC000001", adminID)
 	require.NotNil(t, appErr)
 	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
+}
+
+func TestExtendSubscription_FromLifetime_SetsExpiryFromNow(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	adminID := seedAdmin(t, db)
+	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+
+	customers, err := svc.ListCustomers(context.Background(), "budi")
+	require.NoError(t, err)
+	require.Len(t, customers, 1)
+	assert.Nil(t, customers[0].SubscriptionExpiresAt, "a freshly-purchased customer starts as lifetime")
+	customerID := customers[0].LicenseCustomerID
+
+	require.Nil(t, svc.ExtendSubscription(context.Background(), customerID, 1, nil, adminID))
+
+	customer, appErr := svc.GetCustomer(context.Background(), customerID)
+	require.Nil(t, appErr)
+	require.NotNil(t, customer.SubscriptionExpiresAt)
+	assert.WithinDuration(t, time.Now().AddDate(0, 1, 0), *customer.SubscriptionExpiresAt, time.Minute)
+
+	extensions, err := svc.ListSubscriptionExtensions(context.Background(), customerID)
+	require.NoError(t, err)
+	require.Len(t, extensions, 1)
+	assert.Equal(t, 1, extensions[0].Months)
+}
+
+func TestExtendSubscription_BeforeExpiry_StacksOnTopInsteadOfFromNow(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	adminID := seedAdmin(t, db)
+	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+	customers, err := svc.ListCustomers(context.Background(), "budi")
+	require.NoError(t, err)
+	customerID := customers[0].LicenseCustomerID
+
+	require.Nil(t, svc.ExtendSubscription(context.Background(), customerID, 12, nil, adminID))
+	first, appErr := svc.GetCustomer(context.Background(), customerID)
+	require.Nil(t, appErr)
+	firstExpiry := *first.SubscriptionExpiresAt
+
+	// Renewing again well before the first term ends must stack on top of it, not
+	// restart from "now" — a customer renewing early should never lose time.
+	require.Nil(t, svc.ExtendSubscription(context.Background(), customerID, 1, nil, adminID))
+	second, appErr := svc.GetCustomer(context.Background(), customerID)
+	require.Nil(t, appErr)
+	assert.WithinDuration(t, firstExpiry.AddDate(0, 1, 0), *second.SubscriptionExpiresAt, time.Minute)
+
+	extensions, err := svc.ListSubscriptionExtensions(context.Background(), customerID)
+	require.NoError(t, err)
+	assert.Len(t, extensions, 2, "both extensions must be recorded in the audit trail")
 }
 
 func TestAuthenticate_WrongPassword_Rejected(t *testing.T) {

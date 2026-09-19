@@ -191,6 +191,59 @@ func TestDeactivate_AlreadyDeactivated_ReturnsNotFound(t *testing.T) {
 	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
 }
 
+func TestActivate_SubscriptionCustomer_ExpiresAtReflectsSubscriptionPlusGrace(t *testing.T) {
+	svc, db := newTestService(t)
+	customerID := seedCustomer(t, db, "budi@example.com", "FIXUNIT", 1)
+	subscriptionExpiresAt := time.Now().UTC().Add(30 * 24 * time.Hour).Truncate(time.Second)
+	_, err := db.Exec(`UPDATE license_customers SET subscription_expires_at = $1 WHERE license_customer_id = $2`,
+		subscriptionExpiresAt, customerID)
+	require.NoError(t, err)
+	signer, err := crypto.NewSigner(testSeedHex)
+	require.NoError(t, err)
+
+	result, appErr := svc.Activate(context.Background(), ActivateInput{
+		Email: "budi@example.com", ProductCode: "FIXUNIT", MachineFingerprint: "fp-pc-1",
+	})
+	require.Nil(t, appErr)
+
+	payload, err := crypto.Verify(result.LicenseLic, signer.PublicKeyHex())
+	require.NoError(t, err)
+	assert.WithinDuration(t, subscriptionExpiresAt.Add(SubscriptionGracePeriod), payload.ExpiresAt, time.Second,
+		"a subscription customer's license.lic must expire at subscription_expires_at + grace, not DefaultLicenseTerm")
+}
+
+func TestActivate_SubscriptionCustomer_ReactivatingSameMachineRefreshesToNewSubscriptionExpiry(t *testing.T) {
+	svc, db := newTestService(t)
+	customerID := seedCustomer(t, db, "budi@example.com", "FIXUNIT", 1)
+	signer, err := crypto.NewSigner(testSeedHex)
+	require.NoError(t, err)
+
+	first, appErr := svc.Activate(context.Background(), ActivateInput{
+		Email: "budi@example.com", ProductCode: "FIXUNIT", MachineFingerprint: "fp-pc-1",
+	})
+	require.Nil(t, appErr)
+	firstPayload, err := crypto.Verify(first.LicenseLic, signer.PublicKeyHex())
+	require.NoError(t, err)
+	assert.WithinDuration(t, time.Now().Add(DefaultLicenseTerm), firstPayload.ExpiresAt, time.Minute,
+		"before any extension, a customer is lifetime")
+
+	// Vendor sells this lifetime customer a subscription plan starting now.
+	newExpiry := time.Now().UTC().Add(365 * 24 * time.Hour).Truncate(time.Second)
+	_, err = db.Exec(`UPDATE license_customers SET subscription_expires_at = $1 WHERE license_customer_id = $2`, newExpiry, customerID)
+	require.NoError(t, err)
+
+	// Case 2 (reuse, same fingerprint) must also pick up the new subscription expiry —
+	// the product just needs to call /activate again to refresh, no special code path.
+	second, appErr := svc.Activate(context.Background(), ActivateInput{
+		Email: "budi@example.com", ProductCode: "FIXUNIT", MachineFingerprint: "fp-pc-1",
+	})
+	require.Nil(t, appErr)
+	assert.True(t, second.Reused)
+	secondPayload, err := crypto.Verify(second.LicenseLic, signer.PublicKeyHex())
+	require.NoError(t, err)
+	assert.WithinDuration(t, newExpiry.Add(SubscriptionGracePeriod), secondPayload.ExpiresAt, time.Second)
+}
+
 func TestActivate_LicenseLicVerifiesAndMatchesInput(t *testing.T) {
 	svc, db := newTestService(t)
 	seedCustomer(t, db, "budi@example.com", "FIXUNIT", 1)

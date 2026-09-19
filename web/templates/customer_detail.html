@@ -8,6 +8,13 @@
     <tr><th>Jumlah Pembelian</th><td>{{.Customer.PurchaseCount}}</td></tr>
     <tr><th>Kuota Aktivasi</th><td>{{.Customer.ActiveCount}} / {{.Customer.MaxActivations}} terpakai</td></tr>
     <tr><th>Kuota Branch</th><td>{{.Customer.ActiveBranchCount}} / {{.Customer.MaxBranches}} terpakai</td></tr>
+    <tr><th>Model Lisensi</th><td>
+      {{if .Customer.SubscriptionExpiresAt}}
+        Langganan — aktif sampai <strong>{{.Customer.SubscriptionExpiresAt.Format "2006-01-02"}}</strong>
+      {{else}}
+        <span class="badge badge-active">Lifetime</span>
+      {{end}}
+    </td></tr>
   </table>
 </div>
 
@@ -72,6 +79,47 @@
       </div>
       <div class="field" style="flex: 0 0 auto; align-self: flex-end;">
         <button type="submit" class="btn">Simpan</button>
+      </div>
+    </div>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Langganan</h2>
+  <p class="muted">Opsional — kosongkan/biarkan tak pernah diperpanjang untuk customer lifetime (default). Begitu diperpanjang sekali, license.lic yang diterbitkan lewat /api/v1/activate akan mengikuti tanggal jatuh tempo ini (plus 7 hari masa tenggang) alih-alih masa berlaku lifetime.</p>
+  <table>
+    <thead><tr><th>Tanggal</th><th>Perpanjangan</th><th>Jatuh Tempo Baru</th><th>Catatan</th></tr></thead>
+    <tbody>
+      {{range .SubscriptionExtensions}}
+      <tr>
+        <td>{{.CreateAt.Format "2006-01-02 15:04"}}</td>
+        <td>{{.Months}} bulan</td>
+        <td>{{.NewExpiresAt.Format "2006-01-02"}}</td>
+        <td>{{if .Catatan}}{{.Catatan}}{{end}}</td>
+      </tr>
+      {{else}}
+      <tr><td colspan="4" class="muted">Belum pernah diperpanjang — customer ini masih lifetime.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  <h2 style="margin-top: 20px;">Perpanjang Langganan</h2>
+  <form method="post" action="/admin/customers/{{.Customer.LicenseCustomerID}}/subscription/extend">
+    <div class="field-row">
+      <div class="field" style="max-width: 140px;">
+        <label for="months">Jumlah Bulan</label>
+        <select id="months" name="months">
+          <option value="1">1 bulan</option>
+          <option value="3">3 bulan</option>
+          <option value="6">6 bulan</option>
+          <option value="12" selected>12 bulan</option>
+        </select>
+      </div>
+      <div class="field">
+        <label for="sub_catatan">Catatan (opsional)</label>
+        <input id="sub_catatan" name="catatan" type="text" placeholder="mis. Invoice #123">
+      </div>
+      <div class="field" style="flex: 0 0 auto; align-self: flex-end;">
+        <button type="submit" class="btn">Perpanjang</button>
       </div>
     </div>
   </form>

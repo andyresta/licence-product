@@ -26,6 +26,11 @@ type LicenseCustomer struct {
 	CreateAt          time.Time `json:"create_at"`
 	MaxBranches       int       `json:"max_branches"`
 	ActiveBranchCount int       `json:"active_branch_count"` // computed: COUNT(branches WHERE status='ACTIVE')
+	// SubscriptionExpiresAt is nil for a lifetime license (the default — every existing
+	// customer stays nil, unaffected). When set, internal/service/license.Activate
+	// embeds this date (plus its grace period) as license.lic's expires_at instead of
+	// the ~74-year DefaultLicenseTerm.
+	SubscriptionExpiresAt *time.Time `json:"subscription_expires_at,omitempty"`
 }
 
 type Purchase struct {
@@ -76,6 +81,19 @@ type Branch struct {
 	Status            string     `json:"status"`
 	RegisteredAt      time.Time  `json:"registered_at"`
 	DeactivatedAt     *time.Time `json:"deactivated_at,omitempty"`
+}
+
+// SubscriptionExtension is the audit trail behind LicenseCustomer.SubscriptionExpiresAt
+// — same relationship Purchase has to MaxActivations: the parent row's field is a
+// fast-lookup denormalization, this table is the record of why it is what it is.
+type SubscriptionExtension struct {
+	ExtensionID       string    `json:"extension_id"`
+	LicenseCustomerID string    `json:"license_customer_id"`
+	Months            int       `json:"months"`
+	NewExpiresAt      time.Time `json:"new_expires_at"`
+	Catatan           *string   `json:"catatan,omitempty"`
+	RecordedBy        string    `json:"recorded_by"`
+	CreateAt          time.Time `json:"create_at"`
 }
 
 type AdminUser struct {

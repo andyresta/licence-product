@@ -77,6 +77,7 @@ func main() {
 	mux.HandleFunc("POST /admin/activations/{id}/deactivate", adminHandler.RequireAdmin(adminHandler.ForceDeactivate))
 	mux.HandleFunc("POST /admin/customers/{id}/branches/quota", adminHandler.RequireAdmin(adminHandler.SetBranchQuota))
 	mux.HandleFunc("POST /admin/branches/{id}/deactivate", adminHandler.RequireAdmin(adminHandler.ForceDeactivateBranch))
+	mux.HandleFunc("POST /admin/customers/{id}/subscription/extend", adminHandler.RequireAdmin(adminHandler.ExtendSubscription))
 
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)

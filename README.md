@@ -35,6 +35,14 @@ or API change.
    adjustable per-customer from the admin panel), but nothing is enforced unless the
    product itself calls `POST /api/v1/branches/register`. A product that doesn't care
    about branches simply never calls it. See "Branch (optional)" below.
+7. **Subscription is opt-in per customer, layered on top of the same `/activate` call
+   — no separate endpoint.** A customer defaults to lifetime (`subscription_expires_at`
+   is `NULL`, `expires_at` in every issued `license.lic` stays ~74 years out). Once the
+   vendor records a subscription extension for that customer from the admin panel,
+   every subsequent `/activate` call embeds `subscription_expires_at` (plus a grace
+   period) as `expires_at` instead. Since verification is offline, the product must
+   call `/activate` periodically (e.g. on every app start) to pick up a renewed date —
+   see "Subscription (optional)" below.
 
 ## Data model
 
@@ -53,6 +61,12 @@ or API change.
   for products that call the branch endpoints. Mirrors `activations`'
   ACTIVE/DEACTIVATED state machine exactly (see `internal/service/branch/branch.go`) —
   only `status = 'ACTIVE'` rows count against `license_customers.max_branches`.
+- `license_customers.subscription_expires_at` — `NULL` for every customer by default
+  (lifetime). Set once the vendor records the first subscription extension; from then
+  on it's what `/activate` bases `license.lic`'s `expires_at` on.
+- `subscription_extensions` — an audit trail of every subscription extension recorded
+  against a `license_customers` row, same relationship `purchases` has to
+  `max_activations`.
 
 ## API contract
 
@@ -157,6 +171,36 @@ present** so the caller can tell the customer why registration was refused:
 
 Other failure codes: `INVALID_LICENSE`, `NOT_REGISTERED`, `VALIDATION`.
 
+### Subscription (optional)
+
+Not every product needs this either — skip it entirely and every customer stays
+lifetime forever. There is **no new API endpoint**: subscription is purely a change to
+what `expires_at` the existing `POST /api/v1/activate` embeds in `license.lic`.
+
+- **Lifetime (default).** `license_customers.subscription_expires_at` is `NULL`.
+  `/activate` embeds `now + license.DefaultLicenseTerm` (~74 years), exactly as before
+  this feature existed.
+- **Subscription.** Once the vendor records at least one extension for a customer
+  (admin panel → customer detail → "Perpanjang Langganan"), `subscription_expires_at`
+  is set, and every subsequent `/activate` call (new machine, reused machine, reclaimed
+  machine — all three cases) embeds `subscription_expires_at + license.SubscriptionGracePeriod`
+  (7 days) as `expires_at` instead.
+- **The product must re-activate periodically to pick up a renewal.** Since validation
+  is entirely offline (see "Runtime validation" above), a `license.lic` issued before a
+  renewal has no way to know about it. Call `/activate` again with the same
+  email/product_code/machine_fingerprint (case 2 — reuse, no seat consumed) on every app
+  start, or at least daily, so a renewed `subscription_expires_at` actually reaches the
+  installed copy before the old token expires.
+- **A lapsed subscription is not rejected server-side.** `/activate` always succeeds
+  (subject to the normal seat-quota rules) and issues a `license.lic` reflecting the
+  real `subscription_expires_at`, even if that's already in the past — the product's own
+  offline `expires_at` check is what actually stops it from running, the same way it
+  already does for a lifetime license past a tampered clock. This keeps `/activate`
+  purely about quota tracking; date policy stays entirely client-side.
+- **Extending early stacks, it doesn't reset.** Renewing before the current
+  `subscription_expires_at` extends from that date, not from "now" — a customer who
+  pays a week early never loses that week.
+
 ## license.lic format
 
 A JSON payload plus an Ed25519 signature, encoded as
@@ -177,9 +221,10 @@ Payload:
 ```
 
 Every activation/reactivation gets `expires_at` set ~74 years out
-(`license.DefaultLicenseTerm`) — "lifetime" products are just issued a very-far expiry
-rather than no expiry field at all, so a future subscription-style product can use the
-exact same mechanism with a real expiry instead of a special case.
+(`license.DefaultLicenseTerm`) by default — "lifetime" products are just issued a
+very-far expiry rather than no expiry field at all, so the exact same mechanism serves
+a subscription product too: see "Subscription (optional)" above for how
+`expires_at` instead reflects a customer's real due date once one is set.
 
 **Verifying client-side (in the product, not this server):** decode the two
 base64url segments, verify the signature over the payload bytes using the server's
@@ -215,7 +260,9 @@ activate/deactivate, or delete (only allowed for a product with zero customers e
 recorded against it; otherwise deactivate it instead). From a customer's detail page:
 view every activation (with a "Lepas" button to force-deactivate), the full purchase
 history, and — if the product uses it — every registered branch (with its own "Lepas"
-button) plus a field to adjust `max_branches` directly.
+button) plus a field to adjust `max_branches` directly. The same page shows whether the
+customer is lifetime or subscription (with its due date), the full extension history,
+and a "Perpanjang Langganan" form.
 
 ## Configuration (environment variables)
 
@@ -262,7 +309,8 @@ one package's truncate to race another's still-running test.
 ## What's NOT in this repo
 
 Client-side integration (computing the fingerprint, calling `/activate` from an
-install wizard, verifying `license.lic` at runtime, a "Lepas Aktivasi" UI action, and —
-for a product that opts into it — calling `/api/v1/branches/register` per branch) lives
-in each consuming product's own repo — this server only owns the shared contract
-above.
+install wizard, verifying `license.lic` at runtime, a "Lepas Aktivasi" UI action, calling
+`/api/v1/branches/register` per branch for a product that opts into that, and — for a
+subscription product — re-calling `/activate` periodically so a renewal actually
+reaches the installed copy) lives in each consuming product's own repo — this server
+only owns the shared contract above.

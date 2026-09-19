@@ -236,19 +236,24 @@ const licenseCustomerSelect = `
 	SELECT lc.license_customer_id, lc.email, lc.product_id, p.product_code, lc.purchase_count, lc.max_activations,
 		(SELECT COUNT(*) FROM activations a WHERE a.license_customer_id = lc.license_customer_id AND a.status = 'ACTIVE'),
 		lc.catatan, lc.create_at, lc.max_branches,
-		(SELECT COUNT(*) FROM branches b WHERE b.license_customer_id = lc.license_customer_id AND b.status = 'ACTIVE')
+		(SELECT COUNT(*) FROM branches b WHERE b.license_customer_id = lc.license_customer_id AND b.status = 'ACTIVE'),
+		lc.subscription_expires_at
 	FROM license_customers lc
 	JOIN products p ON p.product_id = lc.product_id`
 
 func scanLicenseCustomer(row interface{ Scan(dest ...any) error }) (model.LicenseCustomer, error) {
 	var c model.LicenseCustomer
 	var catatan sql.NullString
+	var subscriptionExpiresAt sql.NullTime
 	if err := row.Scan(&c.LicenseCustomerID, &c.Email, &c.ProductID, &c.ProductCode, &c.PurchaseCount, &c.MaxActivations,
-		&c.ActiveCount, &catatan, &c.CreateAt, &c.MaxBranches, &c.ActiveBranchCount); err != nil {
+		&c.ActiveCount, &catatan, &c.CreateAt, &c.MaxBranches, &c.ActiveBranchCount, &subscriptionExpiresAt); err != nil {
 		return model.LicenseCustomer{}, err
 	}
 	if catatan.Valid {
 		c.Catatan = &catatan.String
+	}
+	if subscriptionExpiresAt.Valid {
+		c.SubscriptionExpiresAt = &subscriptionExpiresAt.Time
 	}
 	return c, nil
 }
@@ -414,4 +419,82 @@ func (s *Service) ForceDeactivateBranch(ctx context.Context, branchID, adminUser
 		return apperror.New(apperror.NotFound, "branch tidak ditemukan atau sudah dilepas")
 	}
 	return nil
+}
+
+// ExtendSubscription adds months to a customer's subscription, extending from
+// MAX(now, current subscription_expires_at) rather than from "now" — renewing a few
+// days early (or from a NULL/lifetime row, which starts counting from now) never costs
+// the customer anything. Every extension is recorded in subscription_extensions, the
+// audit trail behind the parent row's denormalized field (same relationship purchases
+// has to max_activations).
+func (s *Service) ExtendSubscription(ctx context.Context, licenseCustomerID string, months int, catatan *string, recordedBy string) *apperror.Error {
+	if months <= 0 {
+		return apperror.New(apperror.Validation, "jumlah bulan harus lebih dari 0")
+	}
+
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal memulai transaksi")
+	}
+	defer tx.Rollback() //nolint:errcheck // no-op once committed
+
+	var currentExpiresAt sql.NullTime
+	if err := tx.QueryRowContext(ctx, `SELECT subscription_expires_at FROM license_customers WHERE license_customer_id = $1 FOR UPDATE`,
+		licenseCustomerID).Scan(&currentExpiresAt); err != nil {
+		if err == sql.ErrNoRows {
+			return apperror.New(apperror.NotFound, "customer tidak ditemukan")
+		}
+		return apperror.New(apperror.Internal, "gagal memeriksa data langganan")
+	}
+
+	now := time.Now().UTC()
+	base := now
+	if currentExpiresAt.Valid && currentExpiresAt.Time.After(now) {
+		base = currentExpiresAt.Time
+	}
+	newExpiresAt := base.AddDate(0, months, 0)
+
+	if _, err := tx.ExecContext(ctx, `UPDATE license_customers SET subscription_expires_at = $1, update_at = $2 WHERE license_customer_id = $3`,
+		newExpiresAt, now, licenseCustomerID); err != nil {
+		return apperror.New(apperror.Internal, "gagal memperbarui masa langganan")
+	}
+
+	extensionID, err := idgen.Generate("SUB")
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal membuat extension_id")
+	}
+	if _, err := tx.ExecContext(ctx, `
+		INSERT INTO subscription_extensions (extension_id, license_customer_id, months, new_expires_at, catatan, recorded_by)
+		VALUES ($1, $2, $3, $4, $5, $6)`,
+		extensionID, licenseCustomerID, months, newExpiresAt, catatan, recordedBy); err != nil {
+		return apperror.New(apperror.Internal, "gagal mencatat perpanjangan langganan")
+	}
+
+	if err := tx.Commit(); err != nil {
+		return apperror.New(apperror.Internal, "gagal menyimpan perpanjangan langganan")
+	}
+	return nil
+}
+
+func (s *Service) ListSubscriptionExtensions(ctx context.Context, licenseCustomerID string) ([]model.SubscriptionExtension, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT extension_id, license_customer_id, months, new_expires_at, catatan, recorded_by, create_at
+		FROM subscription_extensions WHERE license_customer_id = $1 ORDER BY create_at DESC`, licenseCustomerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var extensions []model.SubscriptionExtension
+	for rows.Next() {
+		var e model.SubscriptionExtension
+		var catatan sql.NullString
+		if err := rows.Scan(&e.ExtensionID, &e.LicenseCustomerID, &e.Months, &e.NewExpiresAt, &catatan, &e.RecordedBy, &e.CreateAt); err != nil {
+			return nil, err
+		}
+		if catatan.Valid {
+			e.Catatan = &catatan.String
+		}
+		extensions = append(extensions, e)
+	}
+	return extensions, rows.Err()
 }
