@@ -45,7 +45,10 @@
     <div class="field-row">
       <div class="field">
         <label for="email">Email Customer</label>
-        <input id="email" name="email" type="email" required>
+        <input id="email" name="email" type="email" list="customer-emails" placeholder="Cari customer atau ketik email baru..." autocomplete="off" required>
+        <datalist id="customer-emails">
+          {{range .Customers}}<option value="{{.Email}}">{{if .Nama}}{{.Nama}}{{end}}</option>{{end}}
+        </datalist>
       </div>
       <div class="field">
         <label for="product_code">Produk</label>

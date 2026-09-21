@@ -120,7 +120,16 @@ func (h *AdminHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
 		return
 	}
-	data := pageData{Title: "Dashboard", LoggedIn: true, Query: query, Licenses: licenses, Products: products}
+	// Feeds the "Catat Lisensi Baru" form's searchable email dropdown (a <datalist>,
+	// not a <select>) — existing customers show up to pick from, but typing an email
+	// that isn't in the list is still allowed, since RecordPurchase creates a new
+	// customer automatically when the email doesn't exist yet.
+	customers, err := h.admin.ListCustomerDirectory(r.Context(), "")
+	if err != nil {
+		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
+		return
+	}
+	data := pageData{Title: "Dashboard", LoggedIn: true, Query: query, Licenses: licenses, Products: products, Customers: customers}
 	applyFlash(r, &data)
 	h.renderPage(w, "dashboard.html", data)
 }
