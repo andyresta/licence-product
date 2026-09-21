@@ -117,6 +117,33 @@ func TestRegister_DifferentBranch_RejectedOnceQuotaExhausted(t *testing.T) {
 	assert.Equal(t, 1, result.Kuota)
 }
 
+// TestRegister_AfterQuotaExceeded_RaisingMaxBranchesUnblocksImmediately reproduces the
+// vendor-support scenario: a client hits QUOTA_EXCEEDED, the vendor raises max_branches
+// from the admin panel, and the client retries the EXACT SAME failed request (same
+// license.lic, same branch_code) without re-activating first. Register looks up
+// max_branches fresh from license_customers on every call — never from anything cached
+// in license.lic itself — so the retry must succeed immediately.
+func TestRegister_AfterQuotaExceeded_RaisingMaxBranchesUnblocksImmediately(t *testing.T) {
+	svc, db, signer := newTestService(t)
+	licenseCustomerID := seedCustomer(t, db, "budi@example.com", "FIXUNIT", 1)
+	lic := signLicense(t, signer, "budi@example.com", "FIXUNIT")
+
+	_, appErr := svc.Register(context.Background(), RegisterInput{LicenseLic: lic, BranchCode: "CABANG-JKT"})
+	require.Nil(t, appErr)
+
+	_, appErr = svc.Register(context.Background(), RegisterInput{LicenseLic: lic, BranchCode: "CABANG-BDG"})
+	require.NotNil(t, appErr)
+	assert.Equal(t, "QUOTA_EXCEEDED", string(appErr.Code))
+
+	_, err := db.Exec(`UPDATE license_customers SET max_branches = 5 WHERE license_customer_id = $1`, licenseCustomerID)
+	require.NoError(t, err)
+
+	result, appErr := svc.Register(context.Background(), RegisterInput{LicenseLic: lic, BranchCode: "CABANG-BDG"})
+	require.Nil(t, appErr, "raising max_branches must unblock the exact same retry immediately, with no re-activation needed")
+	assert.Equal(t, 2, result.Exist)
+	assert.Equal(t, 5, result.Kuota)
+}
+
 func TestRegister_UnregisteredEmail_Rejected(t *testing.T) {
 	svc, _, signer := newTestService(t)
 	lic := signLicense(t, signer, "unknown@example.com", "FIXUNIT")
