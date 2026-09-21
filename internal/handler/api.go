@@ -126,6 +126,35 @@ func (h *APIHandler) BranchCheck(w http.ResponseWriter, r *http.Request) {
 	}})
 }
 
+type branchReleaseRequest struct {
+	LicenseLic string `json:"license_lic"`
+	BranchCode string `json:"branch_code"`
+}
+
+// BranchRelease handles POST /api/v1/branches/release — the self-service counterpart to
+// BranchRegister, for a product to free up a branch/outlet slot on its own (e.g. a store
+// closed down) without needing the vendor to force-deactivate it from the admin panel.
+func (h *APIHandler) BranchRelease(w http.ResponseWriter, r *http.Request) {
+	var req branchReleaseRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeAppError(w, apperror.New(apperror.Validation, "body permintaan tidak valid"))
+		return
+	}
+	if req.LicenseLic == "" || req.BranchCode == "" {
+		writeAppError(w, apperror.New(apperror.Validation, "license_lic dan branch_code wajib diisi"))
+		return
+	}
+	result, appErr := h.branch.Release(r.Context(), req.LicenseLic, req.BranchCode)
+	if appErr != nil {
+		writeAppError(w, appErr)
+		return
+	}
+	writeJSON(w, http.StatusOK, envelope{Success: true, Data: map[string]any{
+		"exist": result.Exist,
+		"kuota": result.Kuota,
+	}})
+}
+
 type branchRegisterRequest struct {
 	LicenseLic  string  `json:"license_lic"`
 	BranchCode  string  `json:"branch_code"`

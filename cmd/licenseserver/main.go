@@ -62,6 +62,7 @@ func main() {
 	mux.HandleFunc("POST /api/v1/deactivate", apiHandler.Deactivate)
 	mux.HandleFunc("POST /api/v1/branches/check", apiHandler.BranchCheck)
 	mux.HandleFunc("POST /api/v1/branches/register", apiHandler.BranchRegister)
+	mux.HandleFunc("POST /api/v1/branches/release", apiHandler.BranchRelease)
 
 	mux.HandleFunc("GET /admin/login", adminHandler.LoginPage)
 	mux.HandleFunc("GET /admin/captcha.png", adminHandler.CaptchaImage)

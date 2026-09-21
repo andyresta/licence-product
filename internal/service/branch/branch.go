@@ -177,6 +177,46 @@ func (s *Service) Register(ctx context.Context, input RegisterInput) (RegisterRe
 	return RegisterResult{Exist: activeCount + 1, Kuota: maxBranches}, nil
 }
 
+type ReleaseResult struct {
+	Exist int
+	Kuota int
+}
+
+// Release is the self-service counterpart to Register — a product calls this when one
+// of its branches/outlets closes down, freeing that slot on its own instead of making
+// the customer wait on the vendor to step in from the admin panel (see
+// admin.Service.ForceDeactivateBranch for that path). Authenticated the same way as
+// license.Service.Deactivate: by presenting a currently valid, signed license.lic
+// instead of an admin session — no separate credential needed.
+func (s *Service) Release(ctx context.Context, licenseLic, branchCode string) (ReleaseResult, *apperror.Error) {
+	payload, err := crypto.Verify(licenseLic, s.signer.PublicKeyHex())
+	if err != nil {
+		return ReleaseResult{}, apperror.New(apperror.InvalidLicense, "license.lic tidak valid")
+	}
+
+	licenseCustomerID, maxBranches, appErr := s.lookupCustomer(ctx, payload.Email, payload.ProductCode)
+	if appErr != nil {
+		return ReleaseResult{}, appErr
+	}
+
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE branches SET status = $1, deactivated_at = $2, update_at = $2
+		WHERE license_customer_id = $3 AND branch_code = $4 AND status = $5`,
+		model.BranchStatusDeactivated, time.Now().UTC(), licenseCustomerID, branchCode, model.BranchStatusActive)
+	if err != nil {
+		return ReleaseResult{}, apperror.New(apperror.Internal, "gagal melepas branch")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ReleaseResult{}, apperror.New(apperror.NotFound, "branch tidak ditemukan atau sudah dilepas")
+	}
+
+	exist, err := countActiveBranches(ctx, s.db, licenseCustomerID)
+	if err != nil {
+		return ReleaseResult{Kuota: maxBranches}, apperror.New(apperror.Internal, "gagal menghitung branch")
+	}
+	return ReleaseResult{Exist: exist, Kuota: maxBranches}, nil
+}
+
 // lookupCustomer resolves (email, product_code) from a verified license.lic payload to
 // its license_customer_id and current max_branches — the same lookup shape as
 // license.Service.Activate uses for max_activations.

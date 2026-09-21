@@ -171,6 +171,33 @@ present** so the caller can tell the customer why registration was refused:
 
 Other failure codes: `INVALID_LICENSE`, `NOT_REGISTERED`, `VALIDATION`.
 
+#### `POST /api/v1/branches/release`
+
+The self-service counterpart to `/branches/register` — a product calls this when one of
+its branches/outlets closes down, freeing that slot on its own instead of making the
+customer wait on the vendor's admin panel (`ForceDeactivateBranch`). Authenticated the
+same way as `/deactivate`: by presenting a currently valid, signed `license.lic` instead
+of an admin session.
+
+```json
+{
+  "license_lic": "<the license.lic this installation holds>",
+  "branch_code": "CABANG-JAKARTA"
+}
+```
+
+Success (`200`) — same shape as `/branches/register`, reflecting the counts after release:
+
+```json
+{ "success": true, "data": { "exist": 3, "kuota": 5 } }
+```
+
+Failure codes: `NOT_FOUND` (this `branch_code` was never registered for this license, or
+is already released), `INVALID_LICENSE`, `NOT_REGISTERED`, `VALIDATION`. Releasing an
+already-released (or never-registered) `branch_code` is refused rather than treated as a
+no-op, so a caller can tell the difference between "freed a slot just now" and "nothing
+to free."
+
 ### Subscription (optional)
 
 Not every product needs this either — skip it entirely and every customer stays
@@ -310,7 +337,7 @@ one package's truncate to race another's still-running test.
 
 Client-side integration (computing the fingerprint, calling `/activate` from an
 install wizard, verifying `license.lic` at runtime, a "Lepas Aktivasi" UI action, calling
-`/api/v1/branches/register` per branch for a product that opts into that, and — for a
-subscription product — re-calling `/activate` periodically so a renewal actually
-reaches the installed copy) lives in each consuming product's own repo — this server
-only owns the shared contract above.
+`/api/v1/branches/register` and `/api/v1/branches/release` per branch for a product that
+opts into that, and — for a subscription product — re-calling `/activate` periodically
+so a renewal actually reaches the installed copy) lives in each consuming product's own
+repo — this server only owns the shared contract above.

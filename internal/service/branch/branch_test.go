@@ -207,3 +207,77 @@ func TestRegister_ReclaimsDeactivatedBranch_GoesThroughQuotaAgain(t *testing.T) 
 	assert.Equal(t, "QUOTA_EXCEEDED", string(appErr.Code))
 	assert.Equal(t, 1, result.Exist)
 }
+
+func TestRelease_FreesSlotForNextRegistration(t *testing.T) {
+	svc, db, signer := newTestService(t)
+	seedCustomer(t, db, "budi@example.com", "FIXUNIT", 1)
+	lic := signLicense(t, signer, "budi@example.com", "FIXUNIT")
+
+	_, appErr := svc.Register(context.Background(), RegisterInput{LicenseLic: lic, BranchCode: "CABANG-JKT"})
+	require.Nil(t, appErr)
+
+	// Quota is exhausted (1/1) — a different branch_code must be refused...
+	_, appErr = svc.Register(context.Background(), RegisterInput{LicenseLic: lic, BranchCode: "CABANG-BDG"})
+	require.NotNil(t, appErr)
+	assert.Equal(t, "QUOTA_EXCEEDED", string(appErr.Code))
+
+	// ...until the product releases CABANG-JKT itself, self-service, with no admin
+	// involved.
+	releaseResult, appErr := svc.Release(context.Background(), lic, "CABANG-JKT")
+	require.Nil(t, appErr)
+	assert.Equal(t, 0, releaseResult.Exist)
+	assert.Equal(t, 1, releaseResult.Kuota)
+
+	// The freed slot can now go to a brand new branch_code.
+	registerResult, appErr := svc.Register(context.Background(), RegisterInput{LicenseLic: lic, BranchCode: "CABANG-BDG"})
+	require.Nil(t, appErr)
+	assert.Equal(t, 1, registerResult.Exist)
+
+	var status string
+	require.NoError(t, db.QueryRow(`SELECT status FROM branches WHERE branch_code = 'CABANG-JKT'`).Scan(&status))
+	assert.Equal(t, "DEACTIVATED", status)
+}
+
+func TestRelease_AlreadyReleased_ReturnsNotFound(t *testing.T) {
+	svc, db, signer := newTestService(t)
+	seedCustomer(t, db, "budi@example.com", "FIXUNIT", 5)
+	lic := signLicense(t, signer, "budi@example.com", "FIXUNIT")
+
+	_, appErr := svc.Register(context.Background(), RegisterInput{LicenseLic: lic, BranchCode: "CABANG-JKT"})
+	require.Nil(t, appErr)
+
+	_, appErr = svc.Release(context.Background(), lic, "CABANG-JKT")
+	require.Nil(t, appErr)
+
+	// Releasing the same branch_code again (already DEACTIVATED) must not silently
+	// succeed a second time.
+	_, appErr = svc.Release(context.Background(), lic, "CABANG-JKT")
+	require.NotNil(t, appErr)
+	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
+}
+
+func TestRelease_UnknownBranchCode_ReturnsNotFound(t *testing.T) {
+	svc, db, signer := newTestService(t)
+	seedCustomer(t, db, "budi@example.com", "FIXUNIT", 5)
+	lic := signLicense(t, signer, "budi@example.com", "FIXUNIT")
+
+	_, appErr := svc.Release(context.Background(), lic, "CABANG-YANG-TIDAK-PERNAH-ADA")
+	require.NotNil(t, appErr)
+	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
+}
+
+func TestRelease_ForgedLicenseRejected(t *testing.T) {
+	svc, _, _ := newTestService(t)
+	_, appErr := svc.Release(context.Background(), "not-a-real-license", "CABANG-JKT")
+	require.NotNil(t, appErr)
+	assert.Equal(t, "INVALID_LICENSE", string(appErr.Code))
+}
+
+func TestRelease_UnregisteredEmail_Rejected(t *testing.T) {
+	svc, _, signer := newTestService(t)
+	lic := signLicense(t, signer, "unknown@example.com", "FIXUNIT")
+
+	_, appErr := svc.Release(context.Background(), lic, "CABANG-JKT")
+	require.NotNil(t, appErr)
+	assert.Equal(t, "NOT_REGISTERED", string(appErr.Code))
+}
