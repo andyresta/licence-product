@@ -34,11 +34,24 @@
     .badge-deactivated { background: #f1f5f9; color: #64748b; }
     .muted { color: #64748b; font-size: 12.5px; }
     a.link { color: #2563eb; text-decoration: none; }
+    nav.tabs { display: flex; gap: 4px; }
+    nav.tabs a { color: #cbd5e1; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 13.5px; font-weight: 600; }
+    nav.tabs a:hover { background: #334155; color: #fff; }
+    .header-left { display: flex; align-items: center; gap: 20px; }
   </style>
 </head>
 <body>
   <header>
-    <a href="/admin">licence-product</a>
+    <div class="header-left">
+      <a href="/admin">licence-product</a>
+      {{if .LoggedIn}}
+      <nav class="tabs">
+        <a href="/admin">Lisensi</a>
+        <a href="/admin/products">Produk</a>
+        <a href="/admin/customers">Customer</a>
+      </nav>
+      {{end}}
+    </div>
     {{if .LoggedIn}}<form method="post" action="/admin/logout"><button type="submit">Logout</button></form>{{end}}
   </header>
   <main>

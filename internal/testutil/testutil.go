@@ -38,7 +38,7 @@ func OpenTestDB(t *testing.T) *sql.DB {
 	// TRUNCATE ... CASCADE and reset in FK-safe order isn't needed with CASCADE, but
 	// listed explicitly (rather than a dynamic catalog query) so a newly added table
 	// is a deliberate one-line addition here, not a silent gap in test isolation.
-	for _, table := range []string{"subscription_extensions", "branches", "activations", "purchases", "license_customers", "products", "admin_users"} {
+	for _, table := range []string{"subscription_extensions", "branches", "activations", "purchases", "license_customers", "customers", "products", "admin_users"} {
 		if _, err := db.Exec("TRUNCATE TABLE " + table + " CASCADE"); err != nil {
 			t.Fatalf("testutil: truncate %s: %v", table, err)
 		}

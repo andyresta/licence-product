@@ -1,0 +1,60 @@
+{{define "content"}}
+<div class="card">
+  <h1>Customer</h1>
+  <p class="muted">Setiap baris adalah satu customer (satu email) — bisa punya beberapa lisensi di produk berbeda. Untuk mencatat lisensi baru, gunakan halaman <a class="link" href="/admin">Lisensi</a>.</p>
+  <form method="get" action="/admin/customers">
+    <div class="field-row">
+      <div class="field"><input name="q" type="text" placeholder="Cari berdasarkan email atau nama..." value="{{.Query}}"></div>
+      <div class="field" style="flex: 0 0 auto;"><button type="submit" class="btn">Cari</button></div>
+    </div>
+  </form>
+  <table>
+    <thead><tr><th>Email</th><th>Nama</th><th>Telp</th><th>Terdaftar</th><th></th><th></th></tr></thead>
+    <tbody>
+      {{range .Customers}}
+      <tr>
+        <td>{{.Email}}</td>
+        <td>{{if .Nama}}{{.Nama}}{{else}}<span class="muted">—</span>{{end}}</td>
+        <td>{{if .Telp}}{{.Telp}}{{else}}<span class="muted">—</span>{{end}}</td>
+        <td>{{.CreateAt.Format "02 Jan 2006"}}</td>
+        <td><a class="link" href="/admin/customers/{{.CustomerID}}">Detail →</a></td>
+        <td>
+          <form method="post" action="/admin/customers/{{.CustomerID}}/delete" style="display:inline"
+                onsubmit="return confirm('Hapus customer {{.Email}}? Hanya bisa dihapus kalau belum punya lisensi apa pun.');">
+            <button type="submit" class="btn btn-danger" style="padding: 4px 10px; font-size: 12px;">Hapus</button>
+          </form>
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="6" class="muted">Belum ada customer{{if .Query}} yang cocok dengan pencarian{{end}}.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Tambah Customer</h2>
+  <p class="muted">Mencatat lisensi (di halaman Lisensi) juga otomatis membuat customer kalau emailnya belum ada — form ini untuk mendaftarkan customer terlebih dulu, sebelum ada lisensi.</p>
+  <form method="post" action="/admin/customers">
+    <div class="field-row">
+      <div class="field">
+        <label for="new_email">Email</label>
+        <input id="new_email" name="email" type="email" required>
+      </div>
+      <div class="field">
+        <label for="new_nama">Nama (opsional)</label>
+        <input id="new_nama" name="nama" type="text">
+      </div>
+      <div class="field">
+        <label for="new_telp">Telp (opsional)</label>
+        <input id="new_telp" name="telp" type="text">
+      </div>
+    </div>
+    <div class="field">
+      <label for="new_catatan">Catatan (opsional)</label>
+      <input id="new_catatan" name="catatan" type="text">
+    </div>
+    <button type="submit" class="btn btn-secondary">Tambah Customer</button>
+  </form>
+</div>
+{{end}}

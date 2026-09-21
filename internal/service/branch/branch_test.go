@@ -39,11 +39,17 @@ func seedCustomer(t *testing.T, db *sql.DB, email, productCode string, maxBranch
 	require.NoError(t, err)
 	require.NoError(t, db.QueryRow(`SELECT product_id FROM products WHERE product_code = $1`, productCode).Scan(&productID))
 
-	customerID := fmt.Sprintf("LCU%06d", seedSeq)
-	_, err = db.Exec(`INSERT INTO license_customers (license_customer_id, email, product_id, purchase_count, max_activations, max_branches)
-		VALUES ($1, $2, $3, 1, 1, $4)`, customerID, email, productID, maxBranches)
+	custID := fmt.Sprintf("CUS%06d", seedSeq)
+	_, err = db.Exec(`INSERT INTO customers (customer_id, email) VALUES ($1, $2)
+		ON CONFLICT (email) DO UPDATE SET email = EXCLUDED.email`, custID, email)
 	require.NoError(t, err)
-	return customerID
+	require.NoError(t, db.QueryRow(`SELECT customer_id FROM customers WHERE email = $1`, email).Scan(&custID))
+
+	licenseCustomerID := fmt.Sprintf("LCU%06d", seedSeq)
+	_, err = db.Exec(`INSERT INTO license_customers (license_customer_id, customer_id, email, product_id, purchase_count, max_activations, max_branches)
+		VALUES ($1, $2, $3, $4, 1, 1, $5)`, licenseCustomerID, custID, email, productID, maxBranches)
+	require.NoError(t, err)
+	return licenseCustomerID
 }
 
 // signLicense builds a license.lic for (email, productCode) the same shape

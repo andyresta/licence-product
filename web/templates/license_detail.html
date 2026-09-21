@@ -1,21 +1,26 @@
 {{define "content"}}
-<p><a class="link" href="/admin">← Kembali</a></p>
+<p><a class="link" href="/admin">← Kembali ke daftar lisensi</a></p>
 
 <div class="card">
-  <h1>{{.Customer.Email}}</h1>
+  <h1>{{.License.ProductCode}} — {{.License.Email}}</h1>
   <table>
-    <tr><th>Produk</th><td>{{.Customer.ProductCode}}</td></tr>
-    <tr><th>Jumlah Pembelian</th><td>{{.Customer.PurchaseCount}}</td></tr>
-    <tr><th>Kuota Aktivasi</th><td>{{.Customer.ActiveCount}} / {{.Customer.MaxActivations}} terpakai</td></tr>
-    <tr><th>Kuota Branch</th><td>{{.Customer.ActiveBranchCount}} / {{.Customer.MaxBranches}} terpakai</td></tr>
-    <tr><th>Model Lisensi</th><td>
-      {{if .Customer.SubscriptionExpiresAt}}
-        Langganan — aktif sampai <strong>{{.Customer.SubscriptionExpiresAt.Format "2006-01-02"}}</strong>
+    <tr><th style="width: 180px;">Customer</th><td>{{if .License.CustomerNama}}{{.License.CustomerNama}} — {{end}}{{.License.Email}} <a class="link" href="/admin/customers/{{.License.CustomerID}}">(lihat profil →)</a></td></tr>
+    <tr><th>Produk</th><td>{{if .License.ProductNama}}{{.License.ProductNama}} ({{.License.ProductCode}}){{else}}{{.License.ProductCode}}{{end}}</td></tr>
+    <tr><th>Jumlah Pembelian</th><td>{{.License.PurchaseCount}}</td></tr>
+    <tr><th>Kuota Aktivasi</th><td>{{.License.ActiveCount}} / {{.License.MaxActivations}} terpakai</td></tr>
+    <tr><th>Kuota Branch</th><td>{{.License.ActiveBranchCount}} / {{.License.MaxBranches}} terpakai</td></tr>
+    <tr><th>Jenis Lisensi</th><td>
+      {{if eq .License.LicenseType "SUBSCRIPTION"}}
+        <span class="badge badge-deactivated">Langganan</span> — aktif sampai <strong>{{if .License.SubscriptionExpiresAt}}{{.License.SubscriptionExpiresAt.Format "2006-01-02"}}{{else}}—{{end}}</strong>
       {{else}}
         <span class="badge badge-active">Lifetime</span>
       {{end}}
     </td></tr>
   </table>
+  <form method="post" action="/admin/licenses/{{.License.LicenseCustomerID}}/delete" style="margin-top: 14px;"
+        onsubmit="return confirm('Hapus lisensi ini secara permanen? Semua riwayat aktivasi, branch, dan pembelian akan ikut terhapus dan tidak bisa dikembalikan.');">
+    <button type="submit" class="btn btn-danger" style="padding: 6px 12px; font-size: 12.5px;">Hapus Lisensi Ini</button>
+  </form>
 </div>
 
 <div class="card">
@@ -47,7 +52,7 @@
 
 <div class="card">
   <h2>Branch</h2>
-  <p class="muted">Fitur opsional — hanya terisi kalau produk yang dipakai customer ini memanggil endpoint /api/v1/branches/register. Kuota ini terpisah dari kuota aktivasi mesin di atas.</p>
+  <p class="muted">Fitur opsional — hanya terisi kalau produk yang dipakai lisensi ini memanggil endpoint /api/v1/branches/register. Kuota ini terpisah dari kuota aktivasi mesin di atas.</p>
   <table>
     <thead><tr><th>Kode Branch</th><th>Label</th><th>Status</th><th>Terdaftar</th><th></th></tr></thead>
     <tbody>
@@ -71,11 +76,11 @@
     </tbody>
   </table>
   <h2 style="margin-top: 20px;">Ubah Kuota Branch</h2>
-  <form method="post" action="/admin/customers/{{.Customer.LicenseCustomerID}}/branches/quota">
+  <form method="post" action="/admin/licenses/{{.License.LicenseCustomerID}}/branches/quota">
     <div class="field-row">
       <div class="field" style="max-width: 120px;">
         <label for="max_branches">Kuota Branch</label>
-        <input id="max_branches" name="max_branches" type="number" min="0" value="{{.Customer.MaxBranches}}" required>
+        <input id="max_branches" name="max_branches" type="number" min="0" value="{{.License.MaxBranches}}" required>
       </div>
       <div class="field" style="flex: 0 0 auto; align-self: flex-end;">
         <button type="submit" class="btn">Simpan</button>
@@ -86,7 +91,7 @@
 
 <div class="card">
   <h2>Langganan</h2>
-  <p class="muted">Opsional — kosongkan/biarkan tak pernah diperpanjang untuk customer lifetime (default). Begitu diperpanjang sekali, license.lic yang diterbitkan lewat /api/v1/activate akan mengikuti tanggal jatuh tempo ini (plus 7 hari masa tenggang) alih-alih masa berlaku lifetime.</p>
+  <p class="muted">Opsional — kosongkan/biarkan tak pernah diperpanjang untuk lisensi lifetime (default). Begitu diperpanjang sekali, jenis lisensi otomatis berubah jadi Langganan, dan license.lic yang diterbitkan lewat /api/v1/activate akan mengikuti tanggal jatuh tempo ini (plus 7 hari masa tenggang) alih-alih masa berlaku lifetime.</p>
   <table>
     <thead><tr><th>Tanggal</th><th>Perpanjangan</th><th>Jatuh Tempo Baru</th><th>Catatan</th></tr></thead>
     <tbody>
@@ -98,12 +103,12 @@
         <td>{{if .Catatan}}{{.Catatan}}{{end}}</td>
       </tr>
       {{else}}
-      <tr><td colspan="4" class="muted">Belum pernah diperpanjang — customer ini masih lifetime.</td></tr>
+      <tr><td colspan="4" class="muted">Belum pernah diperpanjang — lisensi ini masih lifetime.</td></tr>
       {{end}}
     </tbody>
   </table>
   <h2 style="margin-top: 20px;">Perpanjang Langganan</h2>
-  <form method="post" action="/admin/customers/{{.Customer.LicenseCustomerID}}/subscription/extend">
+  <form method="post" action="/admin/licenses/{{.License.LicenseCustomerID}}/subscription/extend">
     <div class="field-row">
       <div class="field" style="max-width: 140px;">
         <label for="months">Jumlah Bulan</label>
@@ -140,10 +145,11 @@
 </div>
 
 <div class="card">
-  <h2>Tambah Pembelian untuk Customer Ini</h2>
+  <h2>Tambah Pembelian untuk Lisensi Ini</h2>
   <form method="post" action="/admin/purchases">
-    <input type="hidden" name="email" value="{{.Customer.Email}}">
-    <input type="hidden" name="product_code" value="{{.Customer.ProductCode}}">
+    <input type="hidden" name="email" value="{{.License.Email}}">
+    <input type="hidden" name="product_code" value="{{.License.ProductCode}}">
+    <input type="hidden" name="redirect_to" value="/admin/licenses/{{.License.LicenseCustomerID}}">
     <div class="field-row">
       <div class="field" style="max-width: 120px;">
         <label for="seats">Jumlah Seat</label>

@@ -162,17 +162,42 @@ func (s *Service) DeleteProduct(ctx context.Context, productID string) *apperror
 	return nil
 }
 
-// RecordPurchase finds-or-creates the (email, productCode) license_customers row, adds
-// seats to its cumulative max_activations, bumps purchase_count, and inserts an audit
-// row in purchases. All in one transaction so a crash never leaves purchase_count and
-// max_activations out of sync with the purchases table.
-func (s *Service) RecordPurchase(ctx context.Context, email, productCode string, seats int, catatan *string, recordedBy string) *apperror.Error {
-	if seats <= 0 {
+// RecordPurchaseInput is RecordPurchase's parameter struct. LicenseType/SubscriptionMonths
+// only take effect the first time a (email, product) license is created — a repeat
+// purchase against an existing license just adds seats; to change an existing license's
+// type/expiry, use ExtendSubscription instead.
+type RecordPurchaseInput struct {
+	Email              string
+	ProductCode        string
+	Seats              int
+	Catatan            *string
+	RecordedBy         string
+	LicenseType        string // model.LicenseTypeLifetime (default) or model.LicenseTypeSubscription
+	SubscriptionMonths int    // only used when LicenseType == SUBSCRIPTION and the license is new
+}
+
+// RecordPurchase finds-or-creates the Customer (by email), then finds-or-creates the
+// (customer, product) license_customers row, adds seats to its cumulative
+// max_activations, bumps purchase_count, and inserts an audit row in purchases. All in
+// one transaction so a crash never leaves purchase_count and max_activations out of
+// sync with the purchases table.
+func (s *Service) RecordPurchase(ctx context.Context, in RecordPurchaseInput) *apperror.Error {
+	if in.Seats <= 0 {
 		return apperror.New(apperror.Validation, "jumlah seat harus lebih dari 0")
+	}
+	licenseType := in.LicenseType
+	if licenseType == "" {
+		licenseType = model.LicenseTypeLifetime
+	}
+	if licenseType != model.LicenseTypeLifetime && licenseType != model.LicenseTypeSubscription {
+		return apperror.New(apperror.Validation, "jenis lisensi tidak dikenal")
+	}
+	if licenseType == model.LicenseTypeSubscription && in.SubscriptionMonths <= 0 {
+		return apperror.New(apperror.Validation, "jumlah bulan langganan harus lebih dari 0")
 	}
 
 	var productID string
-	if err := s.db.QueryRowContext(ctx, `SELECT product_id FROM products WHERE product_code = $1 AND status_aktif`, productCode).Scan(&productID); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT product_id FROM products WHERE product_code = $1 AND status_aktif`, in.ProductCode).Scan(&productID); err != nil {
 		if err == sql.ErrNoRows {
 			return apperror.New(apperror.NotFound, "product_code tidak ditemukan atau nonaktif")
 		}
@@ -185,12 +210,17 @@ func (s *Service) RecordPurchase(ctx context.Context, email, productCode string,
 	}
 	defer tx.Rollback() //nolint:errcheck
 
+	customerID, aerr := findOrCreateCustomer(ctx, tx, in.Email)
+	if aerr != nil {
+		return aerr
+	}
+
 	var licenseCustomerID string
 	lookupErr := tx.QueryRowContext(ctx, `
 		SELECT license_customer_id FROM license_customers WHERE email = $1 AND product_id = $2 FOR UPDATE`,
-		email, productID).Scan(&licenseCustomerID)
+		in.Email, productID).Scan(&licenseCustomerID)
 	if lookupErr != nil && lookupErr != sql.ErrNoRows {
-		return apperror.New(apperror.Internal, "gagal memeriksa data customer")
+		return apperror.New(apperror.Internal, "gagal memeriksa data lisensi")
 	}
 
 	if lookupErr == sql.ErrNoRows {
@@ -198,18 +228,34 @@ func (s *Service) RecordPurchase(ctx context.Context, email, productCode string,
 		if err != nil {
 			return apperror.New(apperror.Internal, "gagal membuat license_customer_id")
 		}
+		var subscriptionExpiresAt any
+		if licenseType == model.LicenseTypeSubscription {
+			subscriptionExpiresAt = time.Now().UTC().AddDate(0, in.SubscriptionMonths, 0)
+		}
 		if _, err := tx.ExecContext(ctx, `
-			INSERT INTO license_customers (license_customer_id, email, product_id, purchase_count, max_activations)
-			VALUES ($1, $2, $3, 1, $4)`,
-			licenseCustomerID, email, productID, seats); err != nil {
-			return apperror.New(apperror.Internal, "gagal membuat data customer")
+			INSERT INTO license_customers (license_customer_id, customer_id, email, product_id, purchase_count, max_activations, license_type, subscription_expires_at)
+			VALUES ($1, $2, $3, $4, 1, $5, $6, $7)`,
+			licenseCustomerID, customerID, in.Email, productID, in.Seats, licenseType, subscriptionExpiresAt); err != nil {
+			return apperror.New(apperror.Internal, "gagal membuat data lisensi")
+		}
+		if licenseType == model.LicenseTypeSubscription {
+			extensionID, err := idgen.Generate("SUB")
+			if err != nil {
+				return apperror.New(apperror.Internal, "gagal membuat extension_id")
+			}
+			if _, err := tx.ExecContext(ctx, `
+				INSERT INTO subscription_extensions (extension_id, license_customer_id, months, new_expires_at, catatan, recorded_by)
+				VALUES ($1, $2, $3, $4, $5, $6)`,
+				extensionID, licenseCustomerID, in.SubscriptionMonths, subscriptionExpiresAt, in.Catatan, in.RecordedBy); err != nil {
+				return apperror.New(apperror.Internal, "gagal mencatat masa langganan awal")
+			}
 		}
 	} else {
 		if _, err := tx.ExecContext(ctx, `
 			UPDATE license_customers SET purchase_count = purchase_count + 1, max_activations = max_activations + $1, update_at = $2
 			WHERE license_customer_id = $3`,
-			seats, time.Now().UTC(), licenseCustomerID); err != nil {
-			return apperror.New(apperror.Internal, "gagal memperbarui kuota customer")
+			in.Seats, time.Now().UTC(), licenseCustomerID); err != nil {
+			return apperror.New(apperror.Internal, "gagal memperbarui kuota lisensi")
 		}
 	}
 
@@ -219,7 +265,7 @@ func (s *Service) RecordPurchase(ctx context.Context, email, productCode string,
 	}
 	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO purchases (purchase_id, license_customer_id, seats, catatan, recorded_by) VALUES ($1, $2, $3, $4, $5)`,
-		purchaseID, licenseCustomerID, seats, catatan, recordedBy); err != nil {
+		purchaseID, licenseCustomerID, in.Seats, in.Catatan, in.RecordedBy); err != nil {
 		return apperror.New(apperror.Internal, "gagal mencatat pembelian")
 	}
 
@@ -229,25 +275,56 @@ func (s *Service) RecordPurchase(ctx context.Context, email, productCode string,
 	return nil
 }
 
-// ListCustomers returns license_customers rows (with an active-activation count
+// findOrCreateCustomer looks up a customers row by email within tx, creating one if it
+// doesn't exist yet. Used by RecordPurchase so every license_customers row always has a
+// valid customer_id, and by CreateCustomer's own uniqueness check.
+func findOrCreateCustomer(ctx context.Context, tx *sql.Tx, email string) (string, *apperror.Error) {
+	var customerID string
+	err := tx.QueryRowContext(ctx, `SELECT customer_id FROM customers WHERE email = $1 FOR UPDATE`, email).Scan(&customerID)
+	if err == nil {
+		return customerID, nil
+	}
+	if err != sql.ErrNoRows {
+		return "", apperror.New(apperror.Internal, "gagal memeriksa data customer")
+	}
+	customerID, genErr := idgen.Generate("CUS")
+	if genErr != nil {
+		return "", apperror.New(apperror.Internal, "gagal membuat customer_id")
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO customers (customer_id, email) VALUES ($1, $2)`, customerID, email); err != nil {
+		return "", apperror.New(apperror.Internal, "gagal membuat data customer")
+	}
+	return customerID, nil
+}
+
+// ListLicenses returns license_customers rows (with an active-activation count
 // computed alongside) optionally filtered by an email substring — the admin panel's
-// main search view.
+// main license search view. Despite the SQL alias "lc" (kept from the underlying table
+// name), each row is a License, not a Customer — see Customer/ListCustomerDirectory for
+// the person/org side of things.
 const licenseCustomerSelect = `
-	SELECT lc.license_customer_id, lc.email, lc.product_id, p.product_code, lc.purchase_count, lc.max_activations,
+	SELECT lc.license_customer_id, lc.customer_id, lc.email, cu.nama, lc.product_id, p.product_code, p.nama,
+		lc.purchase_count, lc.max_activations,
 		(SELECT COUNT(*) FROM activations a WHERE a.license_customer_id = lc.license_customer_id AND a.status = 'ACTIVE'),
 		lc.catatan, lc.create_at, lc.max_branches,
 		(SELECT COUNT(*) FROM branches b WHERE b.license_customer_id = lc.license_customer_id AND b.status = 'ACTIVE'),
-		lc.subscription_expires_at
+		lc.license_type, lc.subscription_expires_at
 	FROM license_customers lc
-	JOIN products p ON p.product_id = lc.product_id`
+	JOIN products p ON p.product_id = lc.product_id
+	JOIN customers cu ON cu.customer_id = lc.customer_id`
 
 func scanLicenseCustomer(row interface{ Scan(dest ...any) error }) (model.LicenseCustomer, error) {
 	var c model.LicenseCustomer
+	var customerNama sql.NullString
 	var catatan sql.NullString
 	var subscriptionExpiresAt sql.NullTime
-	if err := row.Scan(&c.LicenseCustomerID, &c.Email, &c.ProductID, &c.ProductCode, &c.PurchaseCount, &c.MaxActivations,
-		&c.ActiveCount, &catatan, &c.CreateAt, &c.MaxBranches, &c.ActiveBranchCount, &subscriptionExpiresAt); err != nil {
+	if err := row.Scan(&c.LicenseCustomerID, &c.CustomerID, &c.Email, &customerNama, &c.ProductID, &c.ProductCode, &c.ProductNama,
+		&c.PurchaseCount, &c.MaxActivations, &c.ActiveCount, &catatan, &c.CreateAt, &c.MaxBranches, &c.ActiveBranchCount,
+		&c.LicenseType, &subscriptionExpiresAt); err != nil {
 		return model.LicenseCustomer{}, err
+	}
+	if customerNama.Valid {
+		c.CustomerNama = &customerNama.String
 	}
 	if catatan.Valid {
 		c.Catatan = &catatan.String
@@ -258,7 +335,7 @@ func scanLicenseCustomer(row interface{ Scan(dest ...any) error }) (model.Licens
 	return c, nil
 }
 
-func (s *Service) ListCustomers(ctx context.Context, emailSearch string) ([]model.LicenseCustomer, error) {
+func (s *Service) ListLicenses(ctx context.Context, emailSearch string) ([]model.LicenseCustomer, error) {
 	rows, err := s.db.QueryContext(ctx, licenseCustomerSelect+`
 		WHERE $1 = '' OR lc.email ILIKE '%' || $1 || '%'
 		ORDER BY lc.create_at DESC`, emailSearch)
@@ -266,9 +343,111 @@ func (s *Service) ListCustomers(ctx context.Context, emailSearch string) ([]mode
 		return nil, err
 	}
 	defer rows.Close()
-	var customers []model.LicenseCustomer
+	var licenses []model.LicenseCustomer
 	for rows.Next() {
 		c, err := scanLicenseCustomer(rows)
+		if err != nil {
+			return nil, err
+		}
+		licenses = append(licenses, c)
+	}
+	return licenses, rows.Err()
+}
+
+func (s *Service) GetLicense(ctx context.Context, licenseCustomerID string) (model.LicenseCustomer, *apperror.Error) {
+	c, err := scanLicenseCustomer(s.db.QueryRowContext(ctx, licenseCustomerSelect+` WHERE lc.license_customer_id = $1`, licenseCustomerID))
+	if err == sql.ErrNoRows {
+		return model.LicenseCustomer{}, apperror.New(apperror.NotFound, "lisensi tidak ditemukan")
+	}
+	if err != nil {
+		return model.LicenseCustomer{}, apperror.New(apperror.Internal, "gagal mengambil data lisensi")
+	}
+	return c, nil
+}
+
+// DeleteLicense permanently removes one license_customers row plus everything scoped to
+// it alone (its activations, branches, purchases, subscription_extensions) — none of
+// those child tables carry ON DELETE CASCADE, so this deletes them explicitly, in one
+// transaction, before the parent row. Unlike DeleteCustomer (which refuses while any
+// license still exists), this is a genuine hard delete: it's for clearing out a license
+// and its own history entirely (e.g. test/mistaken data), not something with a safer
+// soft-delete alternative like a product's SetProductStatus.
+func (s *Service) DeleteLicense(ctx context.Context, licenseCustomerID string) *apperror.Error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal memulai transaksi")
+	}
+	defer tx.Rollback() //nolint:errcheck
+
+	for _, table := range []string{"subscription_extensions", "branches", "activations", "purchases"} {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table+" WHERE license_customer_id = $1", licenseCustomerID); err != nil {
+			return apperror.New(apperror.Internal, "gagal menghapus data terkait lisensi")
+		}
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM license_customers WHERE license_customer_id = $1`, licenseCustomerID)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal menghapus lisensi")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperror.New(apperror.NotFound, "lisensi tidak ditemukan")
+	}
+	if err := tx.Commit(); err != nil {
+		return apperror.New(apperror.Internal, "gagal menyimpan penghapusan lisensi")
+	}
+	return nil
+}
+
+func (s *Service) ListLicensesByCustomer(ctx context.Context, customerID string) ([]model.LicenseCustomer, error) {
+	rows, err := s.db.QueryContext(ctx, licenseCustomerSelect+`
+		WHERE lc.customer_id = $1 ORDER BY lc.create_at DESC`, customerID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var licenses []model.LicenseCustomer
+	for rows.Next() {
+		c, err := scanLicenseCustomer(rows)
+		if err != nil {
+			return nil, err
+		}
+		licenses = append(licenses, c)
+	}
+	return licenses, rows.Err()
+}
+
+func scanCustomer(row interface{ Scan(dest ...any) error }) (model.Customer, error) {
+	var c model.Customer
+	var nama, telp, catatan sql.NullString
+	if err := row.Scan(&c.CustomerID, &c.Email, &nama, &telp, &catatan, &c.CreateAt, &c.UpdateAt); err != nil {
+		return model.Customer{}, err
+	}
+	if nama.Valid {
+		c.Nama = &nama.String
+	}
+	if telp.Valid {
+		c.Telp = &telp.String
+	}
+	if catatan.Valid {
+		c.Catatan = &catatan.String
+	}
+	return c, nil
+}
+
+const customerSelect = `SELECT customer_id, email, nama, telp, catatan, create_at, update_at FROM customers`
+
+// ListCustomerDirectory is the admin panel's Customer list — every person/org on file,
+// independent of which (or how many) products they've licensed.
+func (s *Service) ListCustomerDirectory(ctx context.Context, search string) ([]model.Customer, error) {
+	rows, err := s.db.QueryContext(ctx, customerSelect+`
+		WHERE $1 = '' OR email ILIKE '%' || $1 || '%' OR nama ILIKE '%' || $1 || '%'
+		ORDER BY create_at DESC`, search)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var customers []model.Customer
+	for rows.Next() {
+		c, err := scanCustomer(rows)
 		if err != nil {
 			return nil, err
 		}
@@ -277,15 +456,89 @@ func (s *Service) ListCustomers(ctx context.Context, emailSearch string) ([]mode
 	return customers, rows.Err()
 }
 
-func (s *Service) GetCustomer(ctx context.Context, licenseCustomerID string) (model.LicenseCustomer, *apperror.Error) {
-	c, err := scanLicenseCustomer(s.db.QueryRowContext(ctx, licenseCustomerSelect+` WHERE lc.license_customer_id = $1`, licenseCustomerID))
+func (s *Service) GetCustomerProfile(ctx context.Context, customerID string) (model.Customer, *apperror.Error) {
+	c, err := scanCustomer(s.db.QueryRowContext(ctx, customerSelect+` WHERE customer_id = $1`, customerID))
 	if err == sql.ErrNoRows {
-		return model.LicenseCustomer{}, apperror.New(apperror.NotFound, "customer tidak ditemukan")
+		return model.Customer{}, apperror.New(apperror.NotFound, "customer tidak ditemukan")
 	}
 	if err != nil {
-		return model.LicenseCustomer{}, apperror.New(apperror.Internal, "gagal mengambil data customer")
+		return model.Customer{}, apperror.New(apperror.Internal, "gagal mengambil data customer")
 	}
 	return c, nil
+}
+
+// CreateCustomer adds a customer directly from the admin panel (no purchase yet) — the
+// email just needs to be unique; RecordPurchase's own findOrCreateCustomer will pick
+// this row up later once a license is recorded against the same email.
+func (s *Service) CreateCustomer(ctx context.Context, email, nama, telp, catatan string) (model.Customer, *apperror.Error) {
+	id, err := idgen.Generate("CUS")
+	if err != nil {
+		return model.Customer{}, apperror.New(apperror.Internal, "gagal membuat customer_id")
+	}
+	var namaVal, telpVal, catatanVal any
+	if nama != "" {
+		namaVal = nama
+	}
+	if telp != "" {
+		telpVal = telp
+	}
+	if catatan != "" {
+		catatanVal = catatan
+	}
+	if _, err := s.db.ExecContext(ctx, `INSERT INTO customers (customer_id, email, nama, telp, catatan) VALUES ($1, $2, $3, $4, $5)`,
+		id, email, namaVal, telpVal, catatanVal); err != nil {
+		return model.Customer{}, apperror.New(apperror.Validation, "gagal membuat customer — pastikan email belum dipakai")
+	}
+	return s.GetCustomerProfile(ctx, id)
+}
+
+// UpdateCustomerProfile edits a customer's contact info. It deliberately does not touch
+// email — every license_customers row still keys its own activation lookups off
+// lc.email directly (see internal/service/license.Activate), so changing it here would
+// silently orphan that customer's existing licenses from their real email address.
+func (s *Service) UpdateCustomerProfile(ctx context.Context, customerID, nama, telp, catatan string) *apperror.Error {
+	var namaVal, telpVal, catatanVal any
+	if nama != "" {
+		namaVal = nama
+	}
+	if telp != "" {
+		telpVal = telp
+	}
+	if catatan != "" {
+		catatanVal = catatan
+	}
+	res, err := s.db.ExecContext(ctx, `UPDATE customers SET nama = $1, telp = $2, catatan = $3, update_at = $4 WHERE customer_id = $5`,
+		namaVal, telpVal, catatanVal, time.Now().UTC(), customerID)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal memperbarui data customer")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperror.New(apperror.NotFound, "customer tidak ditemukan")
+	}
+	return nil
+}
+
+// DeleteCustomer removes a customer outright — only when they have no license rows left
+// (mirrors DeleteProduct's own refuse-while-referenced rule). A customer with existing
+// licenses should have those deleted first via DeleteLicense (which also clears that
+// license's own activations/branches/purchases history) rather than being cascaded away
+// silently here.
+func (s *Service) DeleteCustomer(ctx context.Context, customerID string) *apperror.Error {
+	var licenseCount int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM license_customers WHERE customer_id = $1`, customerID).Scan(&licenseCount); err != nil {
+		return apperror.New(apperror.Internal, "gagal memeriksa data customer")
+	}
+	if licenseCount > 0 {
+		return apperror.New(apperror.Validation, "customer masih punya lisensi — hapus lisensinya dulu sebelum menghapus customer")
+	}
+	res, err := s.db.ExecContext(ctx, `DELETE FROM customers WHERE customer_id = $1`, customerID)
+	if err != nil {
+		return apperror.New(apperror.Internal, "gagal menghapus customer")
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return apperror.New(apperror.NotFound, "customer tidak ditemukan")
+	}
+	return nil
 }
 
 func (s *Service) ListActivations(ctx context.Context, licenseCustomerID string) ([]model.Activation, error) {
@@ -454,8 +707,9 @@ func (s *Service) ExtendSubscription(ctx context.Context, licenseCustomerID stri
 	}
 	newExpiresAt := base.AddDate(0, months, 0)
 
-	if _, err := tx.ExecContext(ctx, `UPDATE license_customers SET subscription_expires_at = $1, update_at = $2 WHERE license_customer_id = $3`,
-		newExpiresAt, now, licenseCustomerID); err != nil {
+	if _, err := tx.ExecContext(ctx, `
+		UPDATE license_customers SET subscription_expires_at = $1, license_type = $2, update_at = $3 WHERE license_customer_id = $4`,
+		newExpiresAt, model.LicenseTypeSubscription, now, licenseCustomerID); err != nil {
 		return apperror.New(apperror.Internal, "gagal memperbarui masa langganan")
 	}
 

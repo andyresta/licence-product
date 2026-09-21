@@ -37,10 +37,10 @@ func TestRecordPurchase_FirstPurchase_CreatesCustomer(t *testing.T) {
 	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
 	require.Nil(t, appErr)
 
-	appErr = svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 3, nil, adminID)
+	appErr = svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 3, RecordedBy: adminID})
 	require.Nil(t, appErr)
 
-	customers, err := svc.ListCustomers(context.Background(), "budi")
+	customers, err := svc.ListLicenses(context.Background(), "budi")
 	require.NoError(t, err)
 	require.Len(t, customers, 1)
 	assert.Equal(t, 1, customers[0].PurchaseCount)
@@ -54,10 +54,10 @@ func TestRecordPurchase_RepeatPurchase_AccumulatesSeatsAndCount(t *testing.T) {
 	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
 	require.Nil(t, appErr)
 
-	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 2, nil, adminID))
-	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 5, nil, adminID))
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 2, RecordedBy: adminID}))
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 5, RecordedBy: adminID}))
 
-	customers, err := svc.ListCustomers(context.Background(), "budi")
+	customers, err := svc.ListLicenses(context.Background(), "budi")
 	require.NoError(t, err)
 	require.Len(t, customers, 1, "a repeat purchase of the same product must accumulate onto the same row, not create a second one")
 	assert.Equal(t, 2, customers[0].PurchaseCount)
@@ -73,7 +73,7 @@ func TestRecordPurchase_UnknownProductCode_Rejected(t *testing.T) {
 	svc := New(db)
 	adminID := seedAdmin(t, db)
 
-	appErr := svc.RecordPurchase(context.Background(), "budi@example.com", "NOPE", 1, nil, adminID)
+	appErr := svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "NOPE", Seats: 1, RecordedBy: adminID})
 	require.NotNil(t, appErr)
 	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
 }
@@ -84,9 +84,9 @@ func TestForceDeactivate_FreesSeatForNextActivation(t *testing.T) {
 	adminID := seedAdmin(t, db)
 	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
 	require.Nil(t, appErr)
-	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID}))
 
-	customers, err := svc.ListCustomers(context.Background(), "budi")
+	customers, err := svc.ListLicenses(context.Background(), "budi")
 	require.NoError(t, err)
 	customerID := customers[0].LicenseCustomerID
 
@@ -135,12 +135,12 @@ func TestSetProductStatus_DeactivatedProductRejectsNewPurchases(t *testing.T) {
 
 	require.Nil(t, svc.SetProductStatus(context.Background(), product.ProductID, false))
 
-	appErr = svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID)
+	appErr = svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID})
 	require.NotNil(t, appErr, "an inactive product must refuse new purchases")
 	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
 
 	require.Nil(t, svc.SetProductStatus(context.Background(), product.ProductID, true))
-	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID}))
 }
 
 func TestDeleteProduct_RefusesWhenCustomerExists(t *testing.T) {
@@ -149,7 +149,7 @@ func TestDeleteProduct_RefusesWhenCustomerExists(t *testing.T) {
 	adminID := seedAdmin(t, db)
 	product, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
 	require.Nil(t, appErr)
-	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID}))
 
 	appErr = svc.DeleteProduct(context.Background(), product.ProductID)
 	require.NotNil(t, appErr, "a product with a recorded customer must not be deletable")
@@ -179,16 +179,16 @@ func TestSetMaxBranches_UpdatesQuotaDirectly(t *testing.T) {
 	adminID := seedAdmin(t, db)
 	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
 	require.Nil(t, appErr)
-	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID}))
 
-	customers, err := svc.ListCustomers(context.Background(), "budi")
+	customers, err := svc.ListLicenses(context.Background(), "budi")
 	require.NoError(t, err)
 	require.Len(t, customers, 1)
 	assert.Equal(t, 5, customers[0].MaxBranches, "schema default is 5")
 
 	require.Nil(t, svc.SetMaxBranches(context.Background(), customers[0].LicenseCustomerID, 10))
 
-	customer, appErr := svc.GetCustomer(context.Background(), customers[0].LicenseCustomerID)
+	customer, appErr := svc.GetLicense(context.Background(), customers[0].LicenseCustomerID)
 	require.Nil(t, appErr)
 	assert.Equal(t, 10, customer.MaxBranches)
 }
@@ -199,9 +199,9 @@ func TestForceDeactivateBranch_FreesSlotForNextRegistration(t *testing.T) {
 	adminID := seedAdmin(t, db)
 	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
 	require.Nil(t, appErr)
-	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID}))
 
-	customers, err := svc.ListCustomers(context.Background(), "budi")
+	customers, err := svc.ListLicenses(context.Background(), "budi")
 	require.NoError(t, err)
 	customerID := customers[0].LicenseCustomerID
 
@@ -228,9 +228,9 @@ func TestExtendSubscription_FromLifetime_SetsExpiryFromNow(t *testing.T) {
 	adminID := seedAdmin(t, db)
 	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
 	require.Nil(t, appErr)
-	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID}))
 
-	customers, err := svc.ListCustomers(context.Background(), "budi")
+	customers, err := svc.ListLicenses(context.Background(), "budi")
 	require.NoError(t, err)
 	require.Len(t, customers, 1)
 	assert.Nil(t, customers[0].SubscriptionExpiresAt, "a freshly-purchased customer starts as lifetime")
@@ -238,7 +238,7 @@ func TestExtendSubscription_FromLifetime_SetsExpiryFromNow(t *testing.T) {
 
 	require.Nil(t, svc.ExtendSubscription(context.Background(), customerID, 1, nil, adminID))
 
-	customer, appErr := svc.GetCustomer(context.Background(), customerID)
+	customer, appErr := svc.GetLicense(context.Background(), customerID)
 	require.Nil(t, appErr)
 	require.NotNil(t, customer.SubscriptionExpiresAt)
 	assert.WithinDuration(t, time.Now().AddDate(0, 1, 0), *customer.SubscriptionExpiresAt, time.Minute)
@@ -255,26 +255,108 @@ func TestExtendSubscription_BeforeExpiry_StacksOnTopInsteadOfFromNow(t *testing.
 	adminID := seedAdmin(t, db)
 	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
 	require.Nil(t, appErr)
-	require.Nil(t, svc.RecordPurchase(context.Background(), "budi@example.com", "FIXUNIT", 1, nil, adminID))
-	customers, err := svc.ListCustomers(context.Background(), "budi")
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID}))
+	customers, err := svc.ListLicenses(context.Background(), "budi")
 	require.NoError(t, err)
 	customerID := customers[0].LicenseCustomerID
 
 	require.Nil(t, svc.ExtendSubscription(context.Background(), customerID, 12, nil, adminID))
-	first, appErr := svc.GetCustomer(context.Background(), customerID)
+	first, appErr := svc.GetLicense(context.Background(), customerID)
 	require.Nil(t, appErr)
 	firstExpiry := *first.SubscriptionExpiresAt
 
 	// Renewing again well before the first term ends must stack on top of it, not
 	// restart from "now" — a customer renewing early should never lose time.
 	require.Nil(t, svc.ExtendSubscription(context.Background(), customerID, 1, nil, adminID))
-	second, appErr := svc.GetCustomer(context.Background(), customerID)
+	second, appErr := svc.GetLicense(context.Background(), customerID)
 	require.Nil(t, appErr)
 	assert.WithinDuration(t, firstExpiry.AddDate(0, 1, 0), *second.SubscriptionExpiresAt, time.Minute)
 
 	extensions, err := svc.ListSubscriptionExtensions(context.Background(), customerID)
 	require.NoError(t, err)
 	assert.Len(t, extensions, 2, "both extensions must be recorded in the audit trail")
+}
+
+func TestDeleteLicense_RemovesLicenseAndAllItsHistory(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	adminID := seedAdmin(t, db)
+	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 5, RecordedBy: adminID}))
+	licenses, err := svc.ListLicenses(context.Background(), "budi")
+	require.NoError(t, err)
+	licenseID := licenses[0].LicenseCustomerID
+
+	// Give the license some history in every dependent table, to prove DeleteLicense
+	// clears all of it (none of these tables carry ON DELETE CASCADE).
+	_, err = db.Exec(`INSERT INTO activations (activation_id, license_customer_id, machine_fingerprint, status, expires_at)
+		VALUES ('ACT000001', $1, 'fp-1', 'ACTIVE', now() + interval '1 year')`, licenseID)
+	require.NoError(t, err)
+	_, err = db.Exec(`INSERT INTO branches (branch_id, license_customer_id, branch_code, status)
+		VALUES ('BRC000001', $1, 'CABANG-JKT', 'ACTIVE')`, licenseID)
+	require.NoError(t, err)
+	require.Nil(t, svc.ExtendSubscription(context.Background(), licenseID, 1, nil, adminID))
+
+	appErr = svc.DeleteLicense(context.Background(), licenseID)
+	require.Nil(t, appErr)
+
+	_, appErr = svc.GetLicense(context.Background(), licenseID)
+	require.NotNil(t, appErr)
+	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
+
+	var count int
+	for _, table := range []string{"activations", "branches", "purchases", "subscription_extensions"} {
+		require.NoError(t, db.QueryRow("SELECT COUNT(*) FROM "+table+" WHERE license_customer_id = $1", licenseID).Scan(&count))
+		assert.Zero(t, count, "%s must have no rows left for the deleted license", table)
+	}
+}
+
+func TestDeleteLicense_UnknownID_ReturnsNotFound(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+
+	appErr := svc.DeleteLicense(context.Background(), "LCU999999")
+	require.NotNil(t, appErr)
+	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
+}
+
+func TestDeleteCustomer_RefusesWhenLicenseExists(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	adminID := seedAdmin(t, db)
+	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID}))
+	licenses, err := svc.ListLicenses(context.Background(), "budi")
+	require.NoError(t, err)
+	customerID := licenses[0].CustomerID
+
+	appErr = svc.DeleteCustomer(context.Background(), customerID)
+	require.NotNil(t, appErr, "a customer with an existing license must not be deletable")
+	assert.Equal(t, "VALIDATION", string(appErr.Code))
+
+	_, appErr = svc.GetCustomerProfile(context.Background(), customerID)
+	assert.Nil(t, appErr, "the customer must still exist")
+}
+
+func TestDeleteCustomer_RemovesCustomerOnceLicensesAreGone(t *testing.T) {
+	db := testutil.OpenTestDB(t)
+	svc := New(db)
+	adminID := seedAdmin(t, db)
+	_, appErr := svc.CreateProduct(context.Background(), "FIXUNIT", "FixUnit")
+	require.Nil(t, appErr)
+	require.Nil(t, svc.RecordPurchase(context.Background(), RecordPurchaseInput{Email: "budi@example.com", ProductCode: "FIXUNIT", Seats: 1, RecordedBy: adminID}))
+	licenses, err := svc.ListLicenses(context.Background(), "budi")
+	require.NoError(t, err)
+	customerID := licenses[0].CustomerID
+
+	require.Nil(t, svc.DeleteLicense(context.Background(), licenses[0].LicenseCustomerID))
+	require.Nil(t, svc.DeleteCustomer(context.Background(), customerID))
+
+	_, appErr = svc.GetCustomerProfile(context.Background(), customerID)
+	require.NotNil(t, appErr)
+	assert.Equal(t, "NOT_FOUND", string(appErr.Code))
 }
 
 func TestAuthenticate_WrongPassword_Rejected(t *testing.T) {

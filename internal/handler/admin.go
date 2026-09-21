@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"strconv"
 
+	"github.com/andyresta/licence-product/internal/model"
 	"github.com/andyresta/licence-product/internal/service/admin"
 	"github.com/andyresta/licence-product/web"
 )
@@ -26,14 +27,21 @@ func (h *AdminHandler) RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 }
 
 type pageData struct {
-	Title       string
-	LoggedIn    bool
-	Alert       string
-	AlertKind   string
-	Query       string
-	Customers   any
-	Products    any
-	Customer    any
+	Title     string
+	LoggedIn  bool
+	Alert     string
+	AlertKind string
+	Query     string
+
+	Licenses any // dashboard's license search results (model.LicenseCustomer list)
+	License  any // license_detail.html's single license (model.LicenseCustomer)
+
+	Customers        any // customers.html's directory list (model.Customer list)
+	Customer         any // customer_profile.html's single customer (model.Customer)
+	CustomerLicenses any // customer_profile.html's licenses owned by that customer
+
+	Products any
+
 	Activations            any
 	Purchases              any
 	Branches               any
@@ -96,9 +104,13 @@ func (h *AdminHandler) Logout(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/admin/login", http.StatusSeeOther)
 }
 
+// Dashboard is the license directory — every (customer, product) license, its
+// activation/branch usage, and its lifetime/subscription status. Product management
+// lives on its own page (ProductsPage); the customer directory lives on its own
+// (CustomerDirectory).
 func (h *AdminHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
-	customers, err := h.admin.ListCustomers(r.Context(), query)
+	licenses, err := h.admin.ListLicenses(r.Context(), query)
 	if err != nil {
 		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
 		return
@@ -108,14 +120,107 @@ func (h *AdminHandler) Dashboard(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
 		return
 	}
-	data := pageData{Title: "Dashboard", LoggedIn: true, Query: query, Customers: customers, Products: products}
+	data := pageData{Title: "Dashboard", LoggedIn: true, Query: query, Licenses: licenses, Products: products}
 	applyFlash(r, &data)
 	h.renderPage(w, "dashboard.html", data)
 }
 
-func (h *AdminHandler) CustomerDetail(w http.ResponseWriter, r *http.Request) {
+// ProductsPage is the standalone product-management page (full CRUD) that used to be a
+// card at the bottom of the dashboard.
+func (h *AdminHandler) ProductsPage(w http.ResponseWriter, r *http.Request) {
+	products, err := h.admin.ListProducts(r.Context())
+	if err != nil {
+		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
+		return
+	}
+	data := pageData{Title: "Produk", LoggedIn: true, Products: products}
+	applyFlash(r, &data)
+	h.renderPage(w, "products.html", data)
+}
+
+// CustomerDirectory lists every Customer on file (independent of which products they've
+// licensed) with a search box and an "add customer" form.
+func (h *AdminHandler) CustomerDirectory(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	customers, err := h.admin.ListCustomerDirectory(r.Context(), query)
+	if err != nil {
+		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
+		return
+	}
+	data := pageData{Title: "Customer", LoggedIn: true, Query: query, Customers: customers}
+	applyFlash(r, &data)
+	h.renderPage(w, "customers.html", data)
+}
+
+// CustomerProfilePage shows one Customer's contact info plus every License they hold
+// across all products — the "everything this person owns" view the old per-license
+// detail page couldn't provide.
+func (h *AdminHandler) CustomerProfilePage(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	customer, appErr := h.admin.GetCustomer(r.Context(), id)
+	customer, appErr := h.admin.GetCustomerProfile(r.Context(), id)
+	if appErr != nil {
+		http.Error(w, appErr.Message, appErr.HTTPStatus())
+		return
+	}
+	licenses, err := h.admin.ListLicensesByCustomer(r.Context(), id)
+	if err != nil {
+		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
+		return
+	}
+	products, err := h.admin.ListProducts(r.Context())
+	if err != nil {
+		http.Error(w, "gagal memuat data", http.StatusInternalServerError)
+		return
+	}
+	data := pageData{Title: customer.Email, LoggedIn: true, Customer: customer, CustomerLicenses: licenses, Products: products}
+	applyFlash(r, &data)
+	h.renderPage(w, "customer_profile.html", data)
+}
+
+func (h *AdminHandler) CreateCustomer(w http.ResponseWriter, r *http.Request) {
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/customers?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
+		return
+	}
+	customer, appErr := h.admin.CreateCustomer(r.Context(), r.FormValue("email"), r.FormValue("nama"), r.FormValue("telp"), r.FormValue("catatan"))
+	if appErr != nil {
+		http.Redirect(w, r, "/admin/customers?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/admin/customers/"+customer.CustomerID+"?ok="+url.QueryEscape("Customer berhasil ditambahkan"), http.StatusSeeOther)
+}
+
+func (h *AdminHandler) UpdateCustomerProfile(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if err := r.ParseForm(); err != nil {
+		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
+		return
+	}
+	appErr := h.admin.UpdateCustomerProfile(r.Context(), id, r.FormValue("nama"), r.FormValue("telp"), r.FormValue("catatan"))
+	if appErr != nil {
+		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/admin/customers/"+id+"?ok="+url.QueryEscape("Profil customer berhasil diperbarui"), http.StatusSeeOther)
+}
+
+// DeleteCustomer removes a customer — refused (see admin.Service.DeleteCustomer) while
+// they still have any license, so this never silently destroys license history.
+func (h *AdminHandler) DeleteCustomer(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if appErr := h.admin.DeleteCustomer(r.Context(), id); appErr != nil {
+		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/admin/customers?ok="+url.QueryEscape("Customer berhasil dihapus"), http.StatusSeeOther)
+}
+
+// LicenseDetail shows one License's full detail — activations, branches, purchase
+// history, and (for a SUBSCRIPTION license) its extension history. Formerly named
+// CustomerDetail; renamed because model.LicenseCustomer is a License, not a Customer.
+func (h *AdminHandler) LicenseDetail(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	license, appErr := h.admin.GetLicense(r.Context(), id)
 	if appErr != nil {
 		http.Error(w, appErr.Message, appErr.HTTPStatus())
 		return
@@ -141,12 +246,24 @@ func (h *AdminHandler) CustomerDetail(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	data := pageData{
-		Title: customer.Email, LoggedIn: true, Customer: customer,
+		Title: license.Email, LoggedIn: true, License: license,
 		Activations: activations, Purchases: purchases, Branches: branches,
 		SubscriptionExtensions: subscriptionExtensions,
 	}
 	applyFlash(r, &data)
-	h.renderPage(w, "customer_detail.html", data)
+	h.renderPage(w, "license_detail.html", data)
+}
+
+// DeleteLicense permanently removes a license and its own activations/branches/
+// purchases/subscription history — used from the license detail page to let the admin
+// clear out a mistaken or test license entirely, rather than just deactivating it.
+func (h *AdminHandler) DeleteLicense(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if appErr := h.admin.DeleteLicense(r.Context(), id); appErr != nil {
+		http.Redirect(w, r, "/admin/licenses/"+id+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		return
+	}
+	http.Redirect(w, r, "/admin?ok="+url.QueryEscape("Lisensi berhasil dihapus"), http.StatusSeeOther)
 }
 
 func (h *AdminHandler) CreateProduct(w http.ResponseWriter, r *http.Request) {
@@ -167,25 +284,41 @@ func (h *AdminHandler) RecordPurchase(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/admin?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
 		return
 	}
+	// Every entry point (dashboard's quick form, a customer profile's "add license"
+	// form) posts here and expects to land back where it came from.
+	redirectBack := "/admin?"
+	if v := r.FormValue("redirect_to"); v != "" {
+		redirectBack = v + "?"
+	}
 	seats, err := strconv.Atoi(r.FormValue("seats"))
 	if err != nil || seats <= 0 {
-		http.Redirect(w, r, "/admin?err="+url.QueryEscape("jumlah seat tidak valid"), http.StatusSeeOther)
+		http.Redirect(w, r, redirectBack+"err="+url.QueryEscape("jumlah seat tidak valid"), http.StatusSeeOther)
 		return
 	}
-	email := r.FormValue("email")
-	productCode := r.FormValue("product_code")
+	licenseType := r.FormValue("license_type")
+	if licenseType == "" {
+		licenseType = model.LicenseTypeLifetime
+	}
+	subscriptionMonths, _ := strconv.Atoi(r.FormValue("subscription_months"))
 	var catatan *string
 	if v := r.FormValue("catatan"); v != "" {
 		catatan = &v
 	}
 	adminUserID := adminUserIDFromContext(r.Context())
-	appErr := h.admin.RecordPurchase(r.Context(), email, productCode, seats, catatan, adminUserID)
-	redirectBack := "/admin?"
+	appErr := h.admin.RecordPurchase(r.Context(), admin.RecordPurchaseInput{
+		Email:              r.FormValue("email"),
+		ProductCode:        r.FormValue("product_code"),
+		Seats:              seats,
+		Catatan:            catatan,
+		RecordedBy:         adminUserID,
+		LicenseType:        licenseType,
+		SubscriptionMonths: subscriptionMonths,
+	})
 	if appErr != nil {
 		http.Redirect(w, r, redirectBack+"err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, redirectBack+"ok="+url.QueryEscape("Pembelian berhasil dicatat"), http.StatusSeeOther)
+	http.Redirect(w, r, redirectBack+"ok="+url.QueryEscape("Lisensi berhasil dicatat"), http.StatusSeeOther)
 }
 
 func (h *AdminHandler) ForceDeactivate(w http.ResponseWriter, r *http.Request) {
@@ -252,19 +385,19 @@ func (h *AdminHandler) DeleteProduct(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) SetBranchQuota(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/licenses/"+id+"?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
 		return
 	}
 	maxBranches, err := strconv.Atoi(r.FormValue("max_branches"))
 	if err != nil || maxBranches < 0 {
-		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape("kuota branch tidak valid"), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/licenses/"+id+"?err="+url.QueryEscape("kuota branch tidak valid"), http.StatusSeeOther)
 		return
 	}
 	if appErr := h.admin.SetMaxBranches(r.Context(), id, maxBranches); appErr != nil {
-		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/licenses/"+id+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/admin/customers/"+id+"?ok="+url.QueryEscape("Kuota branch berhasil diperbarui"), http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/licenses/"+id+"?ok="+url.QueryEscape("Kuota branch berhasil diperbarui"), http.StatusSeeOther)
 }
 
 func (h *AdminHandler) ForceDeactivateBranch(w http.ResponseWriter, r *http.Request) {
@@ -285,12 +418,12 @@ func (h *AdminHandler) ForceDeactivateBranch(w http.ResponseWriter, r *http.Requ
 func (h *AdminHandler) ExtendSubscription(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if err := r.ParseForm(); err != nil {
-		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/licenses/"+id+"?err="+url.QueryEscape("form tidak valid"), http.StatusSeeOther)
 		return
 	}
 	months, err := strconv.Atoi(r.FormValue("months"))
 	if err != nil || months <= 0 {
-		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape("jumlah bulan tidak valid"), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/licenses/"+id+"?err="+url.QueryEscape("jumlah bulan tidak valid"), http.StatusSeeOther)
 		return
 	}
 	var catatan *string
@@ -299,10 +432,10 @@ func (h *AdminHandler) ExtendSubscription(w http.ResponseWriter, r *http.Request
 	}
 	adminUserID := adminUserIDFromContext(r.Context())
 	if appErr := h.admin.ExtendSubscription(r.Context(), id, months, catatan, adminUserID); appErr != nil {
-		http.Redirect(w, r, "/admin/customers/"+id+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
+		http.Redirect(w, r, "/admin/licenses/"+id+"?err="+url.QueryEscape(appErr.Message), http.StatusSeeOther)
 		return
 	}
-	http.Redirect(w, r, "/admin/customers/"+id+"?ok="+url.QueryEscape("Langganan berhasil diperpanjang"), http.StatusSeeOther)
+	http.Redirect(w, r, "/admin/licenses/"+id+"?ok="+url.QueryEscape("Langganan berhasil diperpanjang"), http.StatusSeeOther)
 }
 
 func applyFlash(r *http.Request, data *pageData) {

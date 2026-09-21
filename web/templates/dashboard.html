@@ -1,6 +1,7 @@
 {{define "content"}}
 <div class="card">
-  <h1>Cari Customer</h1>
+  <h1>Lisensi</h1>
+  <p class="muted">Satu baris = satu lisensi (kombinasi customer + produk). Untuk melihat semua lisensi milik satu customer, buka halaman <a class="link" href="/admin/customers">Customer</a>.</p>
   <form method="get" action="/admin">
     <div class="field-row">
       <div class="field"><input name="q" type="text" placeholder="Cari berdasarkan email..." value="{{.Query}}"></div>
@@ -8,28 +9,39 @@
     </div>
   </form>
   <table>
-    <thead><tr><th>Email</th><th>Produk</th><th>Pembelian</th><th>Kuota</th><th>Aktif</th><th></th></tr></thead>
+    <thead><tr><th>Customer</th><th>Produk</th><th>Jenis</th><th>Berlaku Sampai</th><th>Pembelian</th><th>Kuota</th><th>Aktif</th><th></th><th></th></tr></thead>
     <tbody>
-      {{range .Customers}}
+      {{range .Licenses}}
       <tr>
-        <td>{{.Email}}</td>
+        <td>{{if .CustomerNama}}{{.CustomerNama}}<br><span class="muted">{{.Email}}</span>{{else}}{{.Email}}{{end}}</td>
         <td>{{.ProductCode}}</td>
+        <td>
+          {{if eq .LicenseType "SUBSCRIPTION"}}<span class="badge badge-deactivated">Langganan</span>
+          {{else}}<span class="badge badge-active">Lifetime</span>{{end}}
+        </td>
+        <td>{{if .SubscriptionExpiresAt}}{{.SubscriptionExpiresAt.Format "02 Jan 2006"}}{{else}}<span class="muted">—</span>{{end}}</td>
         <td>{{.PurchaseCount}}</td>
         <td>{{.MaxActivations}}</td>
         <td>{{.ActiveCount}}</td>
-        <td><a class="link" href="/admin/customers/{{.LicenseCustomerID}}">Detail →</a></td>
+        <td><a class="link" href="/admin/licenses/{{.LicenseCustomerID}}">Detail →</a></td>
+        <td>
+          <form method="post" action="/admin/licenses/{{.LicenseCustomerID}}/delete" style="display:inline"
+                onsubmit="return confirm('Hapus lisensi {{.ProductCode}} milik {{.Email}}? Semua riwayat aktivasi, branch, dan pembelian lisensi ini akan ikut terhapus permanen.');">
+            <button type="submit" class="btn btn-danger" style="padding: 4px 10px; font-size: 12px;">Hapus</button>
+          </form>
+        </td>
       </tr>
       {{else}}
-      <tr><td colspan="6" class="muted">Belum ada customer{{if .Query}} yang cocok dengan pencarian{{end}}.</td></tr>
+      <tr><td colspan="9" class="muted">Belum ada lisensi{{if .Query}} yang cocok dengan pencarian{{end}}.</td></tr>
       {{end}}
     </tbody>
   </table>
 </div>
 
 <div class="card">
-  <h2>Catat Pembelian Baru</h2>
-  <p class="muted">Kalau email + product_code ini sudah pernah beli sebelumnya, seat akan ditambahkan ke akun yang sama (bukan bikin baru).</p>
-  <form method="post" action="/admin/purchases">
+  <h2>Catat Lisensi Baru</h2>
+  <p class="muted">Kalau email + produk ini sudah pernah dicatat sebelumnya, seat akan ditambahkan ke lisensi yang sama (jenis &amp; masa berlaku lisensi yang sudah ada tidak berubah — gunakan halaman Detail Lisensi untuk itu).</p>
+  <form method="post" action="/admin/purchases" id="record-purchase-form">
     <div class="field-row">
       <div class="field">
         <label for="email">Email Customer</label>
@@ -46,78 +58,30 @@
         <input id="seats" name="seats" type="number" min="1" value="1" required>
       </div>
     </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Jenis Lisensi</label>
+        <div style="display: flex; gap: 16px; padding-top: 6px;">
+          <label style="display: flex; align-items: center; gap: 6px; font-weight: 400;">
+            <input type="radio" name="license_type" value="LIFETIME" checked onchange="document.getElementById('subscription_months_field').style.display='none'">
+            Lifetime
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; font-weight: 400;">
+            <input type="radio" name="license_type" value="SUBSCRIPTION" onchange="document.getElementById('subscription_months_field').style.display='block'">
+            Langganan
+          </label>
+        </div>
+      </div>
+      <div class="field" id="subscription_months_field" style="display: none; max-width: 160px;">
+        <label for="subscription_months">Durasi (bulan)</label>
+        <input id="subscription_months" name="subscription_months" type="number" min="1" value="1">
+      </div>
+    </div>
     <div class="field">
       <label for="catatan">Catatan (opsional)</label>
       <input id="catatan" name="catatan" type="text" placeholder="mis. Invoice #123">
     </div>
-    <button type="submit" class="btn">Catat Pembelian</button>
-  </form>
-</div>
-
-<div class="card">
-  <h2>Produk</h2>
-  <table>
-    <thead><tr><th>Kode</th><th>Nama</th><th>Status</th><th></th></tr></thead>
-    <tbody>
-      {{range .Products}}
-      <tr>
-        <td>{{.ProductCode}}</td>
-        <td>{{.Nama}}{{if .Keterangan}}<br><span class="muted">{{.Keterangan}}</span>{{end}}</td>
-        <td>{{if .StatusAktif}}<span class="badge badge-active">Aktif</span>{{else}}<span class="badge badge-deactivated">Nonaktif</span>{{end}}</td>
-        <td style="white-space: nowrap;">
-          <details style="display: inline-block;">
-            <summary class="link" style="cursor: pointer; display: inline;">Edit</summary>
-            <div style="margin-top: 10px; min-width: 260px;">
-              <form method="post" action="/admin/products/{{.ProductID}}/update">
-                <div class="field">
-                  <label>Nama Produk</label>
-                  <input name="nama" type="text" value="{{.Nama}}" required>
-                </div>
-                <div class="field">
-                  <label>Keterangan (opsional)</label>
-                  <input name="keterangan" type="text" value="{{.Keterangan}}">
-                </div>
-                <button type="submit" class="btn" style="padding: 6px 12px; font-size: 12.5px;">Simpan</button>
-              </form>
-            </div>
-          </details>
-          {{if .StatusAktif}}
-          <form method="post" action="/admin/products/{{.ProductID}}/toggle" style="display: inline;">
-            <input type="hidden" name="aktif" value="false">
-            <button type="submit" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12.5px;">Nonaktifkan</button>
-          </form>
-          {{else}}
-          <form method="post" action="/admin/products/{{.ProductID}}/toggle" style="display: inline;">
-            <input type="hidden" name="aktif" value="true">
-            <button type="submit" class="btn" style="padding: 6px 12px; font-size: 12.5px;">Aktifkan</button>
-          </form>
-          {{end}}
-          <form method="post" action="/admin/products/{{.ProductID}}/delete" style="display: inline;"
-                onsubmit="return confirm('Hapus produk {{.Nama}}? Hanya bisa dihapus kalau belum pernah punya customer.');">
-            <button type="submit" class="btn btn-danger" style="padding: 6px 12px; font-size: 12.5px;">Hapus</button>
-          </form>
-        </td>
-      </tr>
-      {{else}}
-      <tr><td colspan="4" class="muted">Belum ada produk.</td></tr>
-      {{end}}
-    </tbody>
-  </table>
-  <h2 style="margin-top: 20px;">Tambah Produk</h2>
-  <form method="post" action="/admin/products">
-    <div class="field-row">
-      <div class="field">
-        <label for="new_product_code">Kode Produk</label>
-        <input id="new_product_code" name="product_code" type="text" placeholder="mis. FIXUNIT" required>
-      </div>
-      <div class="field">
-        <label for="new_product_nama">Nama Produk</label>
-        <input id="new_product_nama" name="nama" type="text" placeholder="mis. FixUnit" required>
-      </div>
-      <div class="field" style="flex: 0 0 auto; align-self: flex-end;">
-        <button type="submit" class="btn btn-secondary">Tambah</button>
-      </div>
-    </div>
+    <button type="submit" class="btn">Catat Lisensi</button>
   </form>
 </div>
 {{end}}

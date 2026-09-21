@@ -1,0 +1,109 @@
+{{define "content"}}
+<div class="card">
+  <h1>{{if .Customer.Nama}}{{.Customer.Nama}}{{else}}{{.Customer.Email}}{{end}}</h1>
+  <table>
+    <tr><th style="width: 160px;">Email</th><td>{{.Customer.Email}}</td></tr>
+    <tr><th>Nama</th><td>{{if .Customer.Nama}}{{.Customer.Nama}}{{else}}<span class="muted">—</span>{{end}}</td></tr>
+    <tr><th>Telp</th><td>{{if .Customer.Telp}}{{.Customer.Telp}}{{else}}<span class="muted">—</span>{{end}}</td></tr>
+    <tr><th>Terdaftar</th><td>{{.Customer.CreateAt.Format "02 Jan 2006 15:04"}}</td></tr>
+    <tr><th>Catatan</th><td>{{if .Customer.Catatan}}{{.Customer.Catatan}}{{else}}<span class="muted">—</span>{{end}}</td></tr>
+  </table>
+  <details style="margin-top: 14px;">
+    <summary class="link" style="cursor: pointer;">Edit profil</summary>
+    <form method="post" action="/admin/customers/{{.Customer.CustomerID}}/update" style="margin-top: 12px; max-width: 420px;">
+      <div class="field">
+        <label>Nama</label>
+        <input name="nama" type="text" value="{{if .Customer.Nama}}{{.Customer.Nama}}{{end}}">
+      </div>
+      <div class="field">
+        <label>Telp</label>
+        <input name="telp" type="text" value="{{if .Customer.Telp}}{{.Customer.Telp}}{{end}}">
+      </div>
+      <div class="field">
+        <label>Catatan</label>
+        <input name="catatan" type="text" value="{{if .Customer.Catatan}}{{.Customer.Catatan}}{{end}}">
+      </div>
+      <button type="submit" class="btn" style="padding: 6px 12px; font-size: 12.5px;">Simpan</button>
+    </form>
+  </details>
+  <form method="post" action="/admin/customers/{{.Customer.CustomerID}}/delete" style="margin-top: 14px;"
+        onsubmit="return confirm('Hapus customer ini? Hanya bisa dihapus kalau belum punya lisensi apa pun.');">
+    <button type="submit" class="btn btn-danger" style="padding: 6px 12px; font-size: 12.5px;">Hapus Customer Ini</button>
+  </form>
+</div>
+
+<div class="card">
+  <h2>Lisensi Customer Ini</h2>
+  <table>
+    <thead><tr><th>Produk</th><th>Jenis</th><th>Berlaku Sampai</th><th>Pembelian</th><th>Kuota</th><th>Aktif</th><th></th><th></th></tr></thead>
+    <tbody>
+      {{range .CustomerLicenses}}
+      <tr>
+        <td>{{.ProductCode}}</td>
+        <td>
+          {{if eq .LicenseType "SUBSCRIPTION"}}<span class="badge badge-deactivated">Langganan</span>
+          {{else}}<span class="badge badge-active">Lifetime</span>{{end}}
+        </td>
+        <td>{{if .SubscriptionExpiresAt}}{{.SubscriptionExpiresAt.Format "02 Jan 2006"}}{{else}}<span class="muted">—</span>{{end}}</td>
+        <td>{{.PurchaseCount}}</td>
+        <td>{{.MaxActivations}}</td>
+        <td>{{.ActiveCount}}</td>
+        <td><a class="link" href="/admin/licenses/{{.LicenseCustomerID}}">Detail →</a></td>
+        <td>
+          <form method="post" action="/admin/licenses/{{.LicenseCustomerID}}/delete" style="display:inline"
+                onsubmit="return confirm('Hapus lisensi {{.ProductCode}} ini? Semua riwayat aktivasi, branch, dan pembelian lisensi ini akan ikut terhapus permanen.');">
+            <button type="submit" class="btn btn-danger" style="padding: 4px 10px; font-size: 12px;">Hapus</button>
+          </form>
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="8" class="muted">Customer ini belum punya lisensi apa pun.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+</div>
+
+<div class="card">
+  <h2>Tambah Lisensi untuk Customer Ini</h2>
+  <form method="post" action="/admin/purchases">
+    <input type="hidden" name="email" value="{{.Customer.Email}}">
+    <input type="hidden" name="redirect_to" value="/admin/customers/{{.Customer.CustomerID}}">
+    <div class="field-row">
+      <div class="field">
+        <label for="cp_product_code">Produk</label>
+        <select id="cp_product_code" name="product_code" required>
+          {{range .Products}}<option value="{{.ProductCode}}">{{.Nama}} ({{.ProductCode}})</option>{{end}}
+        </select>
+      </div>
+      <div class="field" style="max-width: 100px;">
+        <label for="cp_seats">Jumlah Seat</label>
+        <input id="cp_seats" name="seats" type="number" min="1" value="1" required>
+      </div>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label>Jenis Lisensi</label>
+        <div style="display: flex; gap: 16px; padding-top: 6px;">
+          <label style="display: flex; align-items: center; gap: 6px; font-weight: 400;">
+            <input type="radio" name="license_type" value="LIFETIME" checked onchange="document.getElementById('cp_subscription_months_field').style.display='none'">
+            Lifetime
+          </label>
+          <label style="display: flex; align-items: center; gap: 6px; font-weight: 400;">
+            <input type="radio" name="license_type" value="SUBSCRIPTION" onchange="document.getElementById('cp_subscription_months_field').style.display='block'">
+            Langganan
+          </label>
+        </div>
+      </div>
+      <div class="field" id="cp_subscription_months_field" style="display: none; max-width: 160px;">
+        <label for="cp_subscription_months">Durasi (bulan)</label>
+        <input id="cp_subscription_months" name="subscription_months" type="number" min="1" value="1">
+      </div>
+    </div>
+    <div class="field">
+      <label for="cp_catatan">Catatan (opsional)</label>
+      <input id="cp_catatan" name="catatan" type="text">
+    </div>
+    <button type="submit" class="btn">Catat Lisensi</button>
+  </form>
+</div>
+{{end}}

@@ -1,0 +1,68 @@
+{{define "content"}}
+<div class="card">
+  <h1>Produk</h1>
+  <table>
+    <thead><tr><th>Kode</th><th>Nama</th><th>Status</th><th></th></tr></thead>
+    <tbody>
+      {{range .Products}}
+      <tr>
+        <td>{{.ProductCode}}</td>
+        <td>{{.Nama}}{{if .Keterangan}}<br><span class="muted">{{.Keterangan}}</span>{{end}}</td>
+        <td>{{if .StatusAktif}}<span class="badge badge-active">Aktif</span>{{else}}<span class="badge badge-deactivated">Nonaktif</span>{{end}}</td>
+        <td style="white-space: nowrap;">
+          <details style="display: inline-block;">
+            <summary class="link" style="cursor: pointer; display: inline;">Edit</summary>
+            <div style="margin-top: 10px; min-width: 260px;">
+              <form method="post" action="/admin/products/{{.ProductID}}/update">
+                <div class="field">
+                  <label>Nama Produk</label>
+                  <input name="nama" type="text" value="{{.Nama}}" required>
+                </div>
+                <div class="field">
+                  <label>Keterangan (opsional)</label>
+                  <input name="keterangan" type="text" value="{{if .Keterangan}}{{.Keterangan}}{{end}}">
+                </div>
+                <button type="submit" class="btn" style="padding: 6px 12px; font-size: 12.5px;">Simpan</button>
+              </form>
+            </div>
+          </details>
+          {{if .StatusAktif}}
+          <form method="post" action="/admin/products/{{.ProductID}}/toggle" style="display: inline;">
+            <input type="hidden" name="aktif" value="false">
+            <button type="submit" class="btn btn-secondary" style="padding: 6px 12px; font-size: 12.5px;">Nonaktifkan</button>
+          </form>
+          {{else}}
+          <form method="post" action="/admin/products/{{.ProductID}}/toggle" style="display: inline;">
+            <input type="hidden" name="aktif" value="true">
+            <button type="submit" class="btn" style="padding: 6px 12px; font-size: 12.5px;">Aktifkan</button>
+          </form>
+          {{end}}
+          <form method="post" action="/admin/products/{{.ProductID}}/delete" style="display: inline;"
+                onsubmit="return confirm('Hapus produk {{.Nama}}? Hanya bisa dihapus kalau belum pernah punya customer.');">
+            <button type="submit" class="btn btn-danger" style="padding: 6px 12px; font-size: 12.5px;">Hapus</button>
+          </form>
+        </td>
+      </tr>
+      {{else}}
+      <tr><td colspan="4" class="muted">Belum ada produk.</td></tr>
+      {{end}}
+    </tbody>
+  </table>
+  <h2 style="margin-top: 20px;">Tambah Produk</h2>
+  <form method="post" action="/admin/products">
+    <div class="field-row">
+      <div class="field">
+        <label for="new_product_code">Kode Produk</label>
+        <input id="new_product_code" name="product_code" type="text" placeholder="mis. FIXUNIT" required>
+      </div>
+      <div class="field">
+        <label for="new_product_nama">Nama Produk</label>
+        <input id="new_product_nama" name="nama" type="text" placeholder="mis. FixUnit" required>
+      </div>
+      <div class="field" style="flex: 0 0 auto; align-self: flex-end;">
+        <button type="submit" class="btn btn-secondary">Tambah</button>
+      </div>
+    </div>
+  </form>
+</div>
+{{end}}
